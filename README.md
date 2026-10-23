@@ -1,6 +1,14 @@
-# Personal Agent — IA local + Telegram + Google (Gmail / Calendar)
+# Diogenes
 
-Prototipo de **agente personal** con un LLM ejecutado **en local**, accesible por **Telegram**, que consulta **Gmail y Google Calendar de prueba** y se levanta entero con **Docker Compose**.
+<p align="center">
+  <img src="docs/diogenes.png" alt="Diógenes en su tinaja frente a Alejandro Magno" width="700">
+</p>
+
+> *«Apártate, que me tapas el sol.»* — Diógenes a Alejandro Magno
+
+**Diogenes** es un agente personal con IA local. Igual que el filósofo que vivía en una tinaja y no necesitaba nada del rey más poderoso del mundo, Diogenes funciona con lo mínimo: **0 €, sin GPU obligatoria y sin depender de APIs de pago**. Y tampoco obedece a cualquiera: aunque un correo le ordene algo, no ejecuta ninguna acción sin tu confirmación.
+
+LLM ejecutado **en local**, accesible por **Telegram**, que consulta **Gmail y Google Calendar de prueba**, controla un **simulador doméstico** y gestiona **tareas**. Todo se levanta con **Docker Compose**.
 
 - **Equipo:** Nelson Karlsson · Yeray Trejo
 - **Presupuesto:** 0 €
@@ -8,6 +16,17 @@ Prototipo de **agente personal** con un LLM ejecutado **en local**, accesible po
 - **Estado:** Fase 0 — definición
 
 > Este repo **nunca** contiene modelos, secretos, `.env` reales, tokens ni datos personales. Ver [Seguridad](#seguridad-reglas-del-repo).
+
+---
+
+## Por qué Diogenes
+
+| Diógenes | Diogenes (el agente) |
+|---|---|
+| Vivía en una tinaja con lo imprescindible | Corre en un portátil normal, 0 €, modelo de 4B |
+| No se dejaba mandar ni por Alejandro | Ignora órdenes inyectadas en correos: la confirmación la impone el código, no el prompt |
+| Buscaba con su lámpara a un hombre honesto | Busca en tu correo y tu calendario, y te dice lo que encuentra sin inventar |
+| Rechazaba lo superfluo | Permisos mínimos: solo lectura salvo confirmación explícita |
 
 ---
 
@@ -71,7 +90,7 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 | 2 | 20 oct – 1 nov | Fase 1 | Comparativa de agentes cerrada |
 | 3 | 27 oct – 8 nov | Fase 2 | Ollama + 3 modelos comparados, tool calling probado |
 | 4 | 3 – 15 nov | Fase 3 | Guía de parámetros |
-| 5 | 10 – 22 nov | Fase 4 | Bot de Telegram respondiendo con el modelo local |
+| 5 | 10 – 22 nov | Fase 4 | Diogenes respondiendo por Telegram con el modelo local |
 | 6–7 | 17 nov – 2 dic | Fase 5 | `tools-mcp`: Gmail, Calendar, tareas y simulador |
 | 8 | 30 nov – 8 dic | Fase 6 | Prompt injection, riesgos, grabación de respaldo |
 | — | 9 dic | Entrega | Renovar OAuth, tag `v1.0.0` y Release |
@@ -85,7 +104,7 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **N+Y** = ambos
 
 ### Fase 0 — Setup del proyecto
-- [ ] Crear repo remoto privado y dar acceso al profesor — **N**
+- [ ] Crear repo remoto privado `diogenes` y dar acceso al profesor — **N**
 - [ ] Tablero Trello (TO DO / DOING / DONE) compartido en solo lectura con el profesor — **Y**
 - [ ] Flujo Git: `main` protegida, ramas `feat/…` y `docs/…`, PR revisada por el otro — **N+Y**
 - [ ] `.gitignore`, `.env.example` y estructura de carpetas — **N**
@@ -126,7 +145,7 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [ ] Servicio `n8n` en `docker-compose.yml` conectado a `ollama` — **N**
 - [ ] Telegram por **long polling** — **Y**
 - [ ] Restringir el bot a nuestros chat IDs — **Y**
-- [ ] Prompt de sistema → `configuracion/agente.example.json`
+- [ ] Prompt de sistema de Diogenes → `configuracion/agente.example.json`
 - [ ] Documentar → `integraciones/telegram.md`
 
 ### Fase 5 — Herramientas externas
@@ -154,7 +173,7 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 
 ```bash
 git clone <repo>
-cd personal-agent
+cd diogenes
 cp .env.example .env        # rellenar con tus credenciales locales
 docker compose up -d
 docker compose exec ollama ollama pull qwen3.5:4b
@@ -172,11 +191,13 @@ ssh -L 8080:127.0.0.1:8080 <usuario>@<ip-del-portatil>
 ## Estructura
 
 ```
-personal-agent/
+diogenes/
 ├── README.md
 ├── .gitignore
 ├── .env.example
 ├── docker-compose.yml
+├── docs/
+│   └── diogenes.png        # imagen del README
 ├── docker/
 │   ├── tools-mcp/          # servidor MCP propio (Python)
 │   └── casa-sim/           # simulador doméstico + vista web
@@ -200,3 +221,9 @@ personal-agent/
 - Escritura (enviar, crear, borrar) → confirmación impuesta por la plataforma y por `tools-mcp`.
 - En equipos del aula: secretos en el perfil propio y borrarlos al terminar la sesión.
 - Un solo proceso de long polling por token de Telegram a la vez: el portátil de respaldo solo arranca `n8n` si el principal está parado.
+
+---
+
+## Créditos de la imagen
+
+Pintura de Diógenes y Alejandro Magno (firmada en el lienzo, siglo XVIII), obra de dominio público. Usada como imagen de portada del proyecto.
