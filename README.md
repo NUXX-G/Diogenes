@@ -1,7 +1,7 @@
 # Diogenes
 
 <p align="center">
-  <img src="docs/diogenes.png" alt="Diógenes en su tinaja frente a Alejandro Magno" width="700">
+  <img src="img/diogenes.png" alt="Diógenes en su tinaja frente a Alejandro Magno" width="700">
 </p>
 
 > *«Apártate, que me tapas el sol.»* — Diógenes a Alejandro Magno
