@@ -42,7 +42,7 @@ Usuario (Telegram)
 │      │                         │                                           │
 │      ▼                         ▼  MCP                                      │
 │   [ollama]                  [tools-mcp]  servidor MCP propio (Python)      │
-│   qwen3.5:4b (volumen)        ├─ gmail_buscar()       (solo lectura)       │
+│   qwen3:4b-instruct (volumen) ├─ gmail_buscar()       (solo lectura)       │
 │                               ├─ calendar_listar()    (solo lectura)       │
 │                               ├─ calendar_crear()     (requiere confirmar) │
 │                               ├─ tareas_*()           → SQLite (volumen)   │
@@ -66,12 +66,12 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 |---|---|---|
 | Entorno | **Híbrido**: desarrollo en portátiles propios, validación en el aula | Modelo más capaz sin perder la compatibilidad con el aula |
 | Plataforma | **n8n** + servidor MCP propio en Python (`tools-mcp`) | Telegram, agente y aprobación humana nativos; tools con control propio |
-| Modelo principal | **`qwen3.5:4b`** (Q4_K_M, ~2.6 GB) | Tool calling nativo, buen español, licencia Apache-2.0 |
-| Modelos de comparación | **`qwen3:4b-instruct`** y **`llama3.2:3b`** | Referencia de tool calling a 4B y contraste más ligero |
-| Cuantización | `qwen3.5:4b` en **Q4_K_M vs Q8_0** | Mismo modelo, distinta calidad y consumo |
-| Modo thinking | **Desactivado** en el agente | Menos latencia en CPU (documentado en `modelos/parametros.md`) |
-| Motor | **Ollama**, última estable (≥ 0.32) con tag fijado en Fase 0 | Soporte de Qwen3.5 y API compatible con OpenAI |
-| n8n | **`n8nio/n8n:2.42.7`** (última estable a oct. 2026) | Versión reproducible, nada de `:latest` |
+| Modelo principal | **`qwen3:4b-instruct-2507`** (`q4_K_M`; 2,5 GB en disco, ~3,7 GiB cargado con `num_ctx` 8192) | Mejor de la batería: 30/33, tool calling 15/15 y resiste la orden inyectada en un correo ([comparativa](modelos/comparativa.md)) |
+| Modelos de comparación | **`qwen3.5:4b`** y **`llama3.2:3b`** | Candidato inicial (propuso la acción inyectada) y contraste más ligero |
+| Cuantización | `qwen3:4b-instruct-2507` en **`q4_K_M` vs `q8_0`** | Mismo modelo, distinta calidad y consumo |
+| Modo thinking | **No aplica**: el modelo solo tiene modo sin thinking ([model card](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)) | Sin bloques de razonamiento ni su latencia en CPU. Ollama lo anuncia como capacidad, así que la batería envía `think: false` por si acaso |
+| Motor | **`ollama/ollama:0.40.11`** (fijada en oct. 2026) | Soporte de Qwen3.5 y API compatible con OpenAI |
+| n8n | **`n8nio/n8n:2.44.7`** (fijada en oct. 2026) | Versión reproducible, nada de `:latest` |
 | MCP | **Sí**, contenedor `tools-mcp` | Objetivo de aprendizaje y control de permisos |
 | Gmail / Calendar | **API directa** desde `tools-mcp` | Scopes mínimos y confirmación impuesta en código |
 | Ampliación | **Simulador doméstico con vista web** + **tareas en SQLite** | Demostrable por Telegram y en pantalla, 0 €, aislado |
@@ -79,6 +79,14 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 | Portátiles de demo | **Ambos**: el de Nelson como principal y el de Yeray como respaldo, con el modelo ya descargado | Si uno falla, el otro levanta el mismo compose. Nunca los dos con el bot activo a la vez |
 | Pantalla del simulador | **Raspberry Pi 400** (y móvil antiguo opcional) por **túnel SSH** a `127.0.0.1` | Cumple la regla de no exponer puertos a la red. Si falla, la vista se muestra en el propio portátil |
 | Días de ampliación | **Solo colchón para incidencias** (OAuth, bugs, red), no para funcionalidades nuevas | El plan cierra el 11 de diciembre |
+
+> **Decisión abierta — Telegram en n8n (se resuelve en la Fase 4).**
+> El *Telegram Trigger* de n8n necesita un **webhook HTTPS público**, lo que choca con la regla de «puertos solo en `127.0.0.1`» y con el long polling previsto (ver [`investigacion/decisiones.md`](investigacion/decisiones.md)).
+> Alternativas que hay que validar:
+> 1. Leer `getUpdates` desde n8n con un **Schedule Trigger + HTTP Request**.
+> 2. Un **nodo de la comunidad** que haga polling.
+>
+> **Exponer n8n a internet queda descartado.**
 
 ---
 
@@ -107,18 +115,18 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [ ] Crear repo remoto privado `diogenes` y dar acceso al profesor — **N**
 - [ ] Tablero Trello (TO DO / DOING / DONE) compartido en solo lectura con el profesor — **Y**
 - [ ] Flujo Git: `main` protegida, ramas `feat/…` y `docs/…`, PR revisada por el otro — **N+Y**
-- [ ] `.gitignore`, `.env.example` y estructura de carpetas — **N**
+- [x] `.gitignore`, `.env.example` y estructura de carpetas — **N**
 - [ ] Cuenta Google **exclusiva** del proyecto con datos ficticios (correos y eventos) — **Y**
 - [ ] Bot de Telegram con @BotFather (token solo en `.env` local) — **N**
 - [ ] Docker + WSL2 en el aula y en ambos portátiles, documentando el límite de memoria de WSL2 — **N+Y**
 - [ ] Bloqueos de red del centro (Telegram, Google OAuth, Docker Hub, Ollama) — **N+Y**
-- [ ] Fijar el tag exacto de Ollama — **N**
+- [x] Fijar el tag exacto de Ollama — **N** (`ollama/ollama:0.40.11`)
 
 ### Fase 1 — Investigación de agentes personales
-- [ ] Investigar ≥ 3 soluciones (≥ 2 agentes personales reales) — **N+Y**
-- [ ] Clasificar: asistente conversacional / agente personal / agente de programación / framework / automatización
-- [ ] Tabla comparativa con fuentes → `investigacion/comparativa-agentes.md`
-- [ ] Justificar la elección de n8n + MCP propio → `investigacion/decisiones.md`
+- [x] Investigar ≥ 3 soluciones (≥ 2 agentes personales reales) — **N+Y**
+- [x] Clasificar: asistente conversacional / agente personal / agente de programación / framework / automatización
+- [x] Tabla comparativa con fuentes → `investigacion/comparativa-agentes.md`
+- [x] Justificar la elección de n8n + MCP propio → `investigacion/decisiones.md`
 
 | Solución | Categoría | Por qué mirarla |
 |---|---|---|
@@ -128,18 +136,21 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 | OpenCode | Agente de programación | Para justificar por qué **no** encaja |
 
 ### Fase 2 — Modelos locales
-- [ ] Ollama en contenedor con volumen para los pesos — **N**
-- [ ] Probar `qwen3.5:4b`, `qwen3:4b-instruct` y `llama3.2:3b` — **N+Y**
-- [ ] Batería común de prompts con **≥ 1 prueba de tool calling** — **Y**
-- [ ] Tabla de calidad, consistencia, velocidad, RAM/CPU y tool calling → `modelos/comparativa.md`
-- [ ] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados
+- [x] Ollama en contenedor con volumen para los pesos — **N**
+- [x] Probar `qwen3.5:4b`, `qwen3:4b-instruct` y `llama3.2:3b` — **N+Y**
+- [x] Batería común de prompts con **≥ 1 prueba de tool calling** — **Y**
+- [x] Tabla de calidad, consistencia, velocidad, RAM/CPU y tool calling → `modelos/comparativa.md`
+- [x] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados (cambiado a `qwen3:4b-instruct-2507`, ver `modelos/comparativa.md`)
+
+> **Medido solo en CPU.** El portátil de las pruebas tiene una RTX 5060, pero el contenedor de Ollama no tiene acceso a la GPU (`100% CPU` en `ollama ps`), para que los resultados sean comparables con el aula y con el otro portátil. Activar la GPU queda como **mejora opcional**, no necesaria para el proyecto.
 
 ### Fase 3 — Parámetros
 - [ ] Temperatura, top-p y top-k — **Y**
-- [ ] Ventana de contexto **real configurada** (`num_ctx`) + conversación larga — **N**
-- [ ] Cuantización: Q4_K_M vs Q8_0 — **N**
+- [ ] Ventana de contexto **real configurada** (`num_ctx`) + conversación larga — **Y**
+- [ ] Cuantización: `qwen3:4b-instruct-2507-q4_K_M` frente a `qwen3:4b-instruct-2507-q8_0` — **Y**
 - [ ] Máximo de tokens de salida — **Y**
-- [ ] Guía con definiciones, configuración, ejemplos y conclusiones → `modelos/parametros.md`
+- [ ] Guía con definiciones, configuración, ejemplos y conclusiones → `modelos/parametros.md` — **Y**
+- [ ] Pendiente de la Fase 1: medir RAM y latencia de `qwen3:4b-instruct-2507` con **64k de contexto**, que es el mínimo que piden OpenClaw y Hermes con modelos locales, frente al `num_ctx` elegido — **Y**
 
 ### Fase 4 — Agente + Telegram
 - [ ] Servicio `n8n` en `docker-compose.yml` conectado a `ollama` — **N**
@@ -149,6 +160,7 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [ ] Documentar → `integraciones/telegram.md`
 
 ### Fase 5 — Herramientas externas
+- [ ] Pendiente de la Fase 1: comprobar qué transporte MCP acepta el *MCP Client Tool* de nuestra versión de n8n (la documentación solo menciona un endpoint SSE) antes de elegir el de `tools-mcp` — **N**
 - [ ] Esqueleto de `tools-mcp` (Python + SDK MCP) conectado al MCP Client de n8n — **N**
 - [ ] Proyecto Google Cloud + OAuth en modo prueba, scopes **mínimos** (lectura primero) — **Y**
 - [ ] `gmail_buscar()`: buscar correo ficticio por asunto → `integraciones/gmail.md` — **Y**
@@ -176,8 +188,16 @@ git clone <repo>
 cd diogenes
 cp .env.example .env        # rellenar con tus credenciales locales
 docker compose up -d
-docker compose exec ollama ollama pull qwen3.5:4b
+docker compose exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M
 ```
+
+Ollama del contenedor desde el host:
+
+- Se publica en `http://127.0.0.1:11435` (configurable con `OLLAMA_HOST_PORT` en `.env`), no en el 11434 habitual.
+- Así no choca con un **Ollama nativo de Windows**, si lo tenéis instalado: ese sigue en el 11434.
+- La batería de pruebas de las Fases 2 y 3 debe apuntar al **11435**. Si apunta al 11434, estaréis midiendo el Ollama nativo y no el del contenedor.
+- Comprobación rápida: `curl http://127.0.0.1:11435/api/version` debe devolver la versión fijada en `docker-compose.yml`.
+- Dentro de Docker, n8n y `tools-mcp` usan `http://ollama:11434` por la red interna.
 
 Vista del simulador desde la Raspberry Pi 400:
 

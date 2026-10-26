@@ -1,0 +1,58 @@
+# --- Secretos y credenciales ---
+.env
+.env.*
+!.env.example
+secrets/
+credentials*.json
+client_secret*.json
+token*.json
+*.pem
+*.key
+
+# --- Configuración real (solo se versionan los *.example.json) ---
+configuracion/*.json
+!configuracion/*.example.json
+
+# --- Bases de datos ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Modelos ---
+*.gguf
+*.safetensors
+*.bin
+models/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Vídeos de demo ---
+# Ignorados por defecto. Un clip de menos de 25 MiB se añade a propósito con
+# `git add -f demo/clip.mp4`; el hook check-added-large-files bloquea los grandes.
+demo/**/*.mp4
+demo/**/*.mov
+demo/**/*.mkv
+demo/**/*.webm
+demo/**/*.avi
+
+# --- Sistema y editores ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.log
+
+# --- Claude Code (ajustes locales) ---
+.claude/settings.local.json

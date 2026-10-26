@@ -1,0 +1,20 @@
+# Configuración de gitleaks: reglas por defecto + reglas propias del proyecto.
+title = "Diogenes"
+
+[extend]
+useDefault = true
+
+# Token de bot de Telegram: <id numérico>:<35 caracteres>.
+# La regla por defecto exige la palabra "telegram" cerca; esta lo detecta suelto.
+[[rules]]
+id = "telegram-bot-token-suelto"
+description = "Token de bot de Telegram"
+regex = '''\b[0-9]{8,10}:AA[0-9A-Za-z_-]{33}\b'''
+keywords = [":aa"]
+
+# Secreto de cliente OAuth de Google.
+[[rules]]
+id = "google-oauth-client-secret"
+description = "Client secret de OAuth de Google"
+regex = '''GOCSPX-[0-9A-Za-z_-]{28}'''
+keywords = ["gocspx-"]
