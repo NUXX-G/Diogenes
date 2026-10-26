@@ -39,7 +39,7 @@ services:
       start_period: 20s
 
   # n8n:                                       # Fase 4
-  #   image: n8nio/n8n:2.42.7                  # tag verificado el 26-10-2026
+  #   image: n8nio/n8n:2.44.7                  # tag verificado el 26-10-2026
   #   restart: unless-stopped
   #   environment:
   #     TZ: ${TZ:-Europe/Madrid}

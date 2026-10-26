@@ -34,7 +34,7 @@ Los requisitos salen del README del proyecto:
 4. **Documentación irregular en lo que usamos.** La página del nodo de Ollama todavía lista modelos Llama 2 y no dice nada de *tool calling* [19]; la del *MCP Client Tool* solo menciona un «SSE Endpoint» [21]. En la Fase 5 habrá que comprobar qué transporte acepta nuestra versión antes de elegir el de `tools-mcp`.
 5. **Aprobaciones por Telegram con fallos reportados.** En el foro hay un caso de aprobación que se quedaba en «No action required» [24]. La documentación de HITL no dice si usa botones [22]. Hay que probarlo pronto (Fase 4) y no darlo por hecho.
 6. **Flujos visuales.** Los flujos se guardan en la base de datos de n8n y en Git solo se pueden versionar como JSON exportado, que se revisa peor que código en una PR. *(Valoración propia, no sale de una fuente.)*
-7. **Cambia rápido.** El README fija `n8nio/n8n:2.42.7`, pero la última versión publicada el 26-10-2026 es `n8n@2.44.7` [36]. Fijar la versión es correcto; solo hay que corregir la frase «última estable a oct. 2026».
+7. **Cambia rápido.** El README fijaba `n8nio/n8n:2.42.7` como «última estable», pero el 26-10-2026 ya se había publicado `n8n@2.44.7` [36]. Hemos actualizado el README a `2.44.7`, «fijada en oct. 2026». Fijar la versión es lo correcto, pero hay que asumir que quedará desfasada.
 
 ## Por qué no las demás
 

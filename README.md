@@ -70,8 +70,8 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 | Modelos de comparación | **`qwen3:4b-instruct`** y **`llama3.2:3b`** | Referencia de tool calling a 4B y contraste más ligero |
 | Cuantización | `qwen3.5:4b` en **Q4_K_M vs Q8_0** | Mismo modelo, distinta calidad y consumo |
 | Modo thinking | **Desactivado** en el agente | Menos latencia en CPU (documentado en `modelos/parametros.md`) |
-| Motor | **Ollama**, última estable (≥ 0.32) con tag fijado en Fase 0 | Soporte de Qwen3.5 y API compatible con OpenAI |
-| n8n | **`n8nio/n8n:2.42.7`** (última estable a oct. 2026) | Versión reproducible, nada de `:latest` |
+| Motor | **`ollama/ollama:0.40.11`** (fijada en oct. 2026) | Soporte de Qwen3.5 y API compatible con OpenAI |
+| n8n | **`n8nio/n8n:2.44.7`** (fijada en oct. 2026) | Versión reproducible, nada de `:latest` |
 | MCP | **Sí**, contenedor `tools-mcp` | Objetivo de aprendizaje y control de permisos |
 | Gmail / Calendar | **API directa** desde `tools-mcp` | Scopes mínimos y confirmación impuesta en código |
 | Ampliación | **Simulador doméstico con vista web** + **tareas en SQLite** | Demostrable por Telegram y en pantalla, 0 €, aislado |
@@ -79,6 +79,14 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 | Portátiles de demo | **Ambos**: el de Nelson como principal y el de Yeray como respaldo, con el modelo ya descargado | Si uno falla, el otro levanta el mismo compose. Nunca los dos con el bot activo a la vez |
 | Pantalla del simulador | **Raspberry Pi 400** (y móvil antiguo opcional) por **túnel SSH** a `127.0.0.1` | Cumple la regla de no exponer puertos a la red. Si falla, la vista se muestra en el propio portátil |
 | Días de ampliación | **Solo colchón para incidencias** (OAuth, bugs, red), no para funcionalidades nuevas | El plan cierra el 11 de diciembre |
+
+> **Decisión abierta — Telegram en n8n (se resuelve en la Fase 4).**
+> El *Telegram Trigger* de n8n necesita un **webhook HTTPS público**, lo que choca con la regla de «puertos solo en `127.0.0.1`» y con el long polling previsto (ver [`investigacion/decisiones.md`](investigacion/decisiones.md)).
+> Alternativas que hay que validar:
+> 1. Leer `getUpdates` desde n8n con un **Schedule Trigger + HTTP Request**.
+> 2. Un **nodo de la comunidad** que haga polling.
+>
+> **Exponer n8n a internet queda descartado.**
 
 ---
 
@@ -136,10 +144,11 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 
 ### Fase 3 — Parámetros
 - [ ] Temperatura, top-p y top-k — **Y**
-- [ ] Ventana de contexto **real configurada** (`num_ctx`) + conversación larga — **N**
-- [ ] Cuantización: Q4_K_M vs Q8_0 — **N**
+- [ ] Ventana de contexto **real configurada** (`num_ctx`) + conversación larga — **Y**
+- [ ] Cuantización: Q4_K_M vs Q8_0 — **Y**
 - [ ] Máximo de tokens de salida — **Y**
-- [ ] Guía con definiciones, configuración, ejemplos y conclusiones → `modelos/parametros.md`
+- [ ] Guía con definiciones, configuración, ejemplos y conclusiones → `modelos/parametros.md` — **Y**
+- [ ] Pendiente de la Fase 1: medir RAM y latencia de `qwen3.5:4b` con **64k de contexto**, que es el mínimo que piden OpenClaw y Hermes con modelos locales, frente al `num_ctx` elegido — **Y**
 
 ### Fase 4 — Agente + Telegram
 - [ ] Servicio `n8n` en `docker-compose.yml` conectado a `ollama` — **N**
@@ -149,6 +158,7 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [ ] Documentar → `integraciones/telegram.md`
 
 ### Fase 5 — Herramientas externas
+- [ ] Pendiente de la Fase 1: comprobar qué transporte MCP acepta el *MCP Client Tool* de nuestra versión de n8n (la documentación solo menciona un endpoint SSE) antes de elegir el de `tools-mcp` — **N**
 - [ ] Esqueleto de `tools-mcp` (Python + SDK MCP) conectado al MCP Client de n8n — **N**
 - [ ] Proyecto Google Cloud + OAuth en modo prueba, scopes **mínimos** (lectura primero) — **Y**
 - [ ] `gmail_buscar()`: buscar correo ficticio por asunto → `integraciones/gmail.md` — **Y**
