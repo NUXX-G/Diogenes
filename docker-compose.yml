@@ -28,7 +28,8 @@ services:
       - "127.0.0.1:${OLLAMA_HOST_PORT:-11435}:11434"
     networks:
       - diogenes
-    # qwen3.5:4b en Q8_0 ocupa ~5 GB más el contexto. Pensado para 16 GB de RAM.
+    # qwen3:4b-instruct-2507 en q4_K_M ocupa ~3,7 GiB cargado (num_ctx 8192); en q8_0
+    # el archivo pesa 4,3 GB más el contexto. Pensado para portátiles de 16 GB.
     mem_limit: 6g
     healthcheck:
       # La imagen no trae curl; `ollama list` falla si el servidor no responde.
@@ -45,6 +46,7 @@ services:
   #     TZ: ${TZ:-Europe/Madrid}
   #     GENERIC_TIMEZONE: ${TZ:-Europe/Madrid}
   #     N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Falta N8N_ENCRYPTION_KEY en .env}
+  #     OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
   #     TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS}
   #   volumes:
   #     - n8n_data:/home/node/.n8n

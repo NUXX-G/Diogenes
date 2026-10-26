@@ -42,7 +42,7 @@ Usuario (Telegram)
 │      │                         │                                           │
 │      ▼                         ▼  MCP                                      │
 │   [ollama]                  [tools-mcp]  servidor MCP propio (Python)      │
-│   qwen3.5:4b (volumen)        ├─ gmail_buscar()       (solo lectura)       │
+│   qwen3:4b-instruct (volumen) ├─ gmail_buscar()       (solo lectura)       │
 │                               ├─ calendar_listar()    (solo lectura)       │
 │                               ├─ calendar_crear()     (requiere confirmar) │
 │                               ├─ tareas_*()           → SQLite (volumen)   │
@@ -66,10 +66,10 @@ El modelo **propone** acciones. La plataforma **decide** si se ejecutan.
 |---|---|---|
 | Entorno | **Híbrido**: desarrollo en portátiles propios, validación en el aula | Modelo más capaz sin perder la compatibilidad con el aula |
 | Plataforma | **n8n** + servidor MCP propio en Python (`tools-mcp`) | Telegram, agente y aprobación humana nativos; tools con control propio |
-| Modelo principal | **`qwen3.5:4b`** (Q4_K_M, ~2.6 GB) | Tool calling nativo, buen español, licencia Apache-2.0 |
-| Modelos de comparación | **`qwen3:4b-instruct`** y **`llama3.2:3b`** | Referencia de tool calling a 4B y contraste más ligero |
-| Cuantización | `qwen3.5:4b` en **Q4_K_M vs Q8_0** | Mismo modelo, distinta calidad y consumo |
-| Modo thinking | **Desactivado** en el agente | Menos latencia en CPU (documentado en `modelos/parametros.md`) |
+| Modelo principal | **`qwen3:4b-instruct-2507`** (`q4_K_M`; 2,5 GB en disco, ~3,7 GiB cargado con `num_ctx` 8192) | Mejor de la batería: 30/33, tool calling 15/15 y resiste la orden inyectada en un correo ([comparativa](modelos/comparativa.md)) |
+| Modelos de comparación | **`qwen3.5:4b`** y **`llama3.2:3b`** | Candidato inicial (propuso la acción inyectada) y contraste más ligero |
+| Cuantización | `qwen3:4b-instruct-2507` en **`q4_K_M` vs `q8_0`** | Mismo modelo, distinta calidad y consumo |
+| Modo thinking | **No aplica**: el modelo solo tiene modo sin thinking ([model card](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)) | Sin bloques de razonamiento ni su latencia en CPU. Ollama lo anuncia como capacidad, así que la batería envía `think: false` por si acaso |
 | Motor | **`ollama/ollama:0.40.11`** (fijada en oct. 2026) | Soporte de Qwen3.5 y API compatible con OpenAI |
 | n8n | **`n8nio/n8n:2.44.7`** (fijada en oct. 2026) | Versión reproducible, nada de `:latest` |
 | MCP | **Sí**, contenedor `tools-mcp` | Objetivo de aprendizaje y control de permisos |
@@ -140,15 +140,17 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [x] Probar `qwen3.5:4b`, `qwen3:4b-instruct` y `llama3.2:3b` — **N+Y**
 - [x] Batería común de prompts con **≥ 1 prueba de tool calling** — **Y**
 - [x] Tabla de calidad, consistencia, velocidad, RAM/CPU y tool calling → `modelos/comparativa.md`
-- [x] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados (propuesta: cambiar a `qwen3:4b-instruct`, ver `modelos/comparativa.md`)
+- [x] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados (cambiado a `qwen3:4b-instruct-2507`, ver `modelos/comparativa.md`)
+
+> **Medido solo en CPU.** El portátil de las pruebas tiene una RTX 5060, pero el contenedor de Ollama no tiene acceso a la GPU (`100% CPU` en `ollama ps`), para que los resultados sean comparables con el aula y con el otro portátil. Activar la GPU queda como **mejora opcional**, no necesaria para el proyecto.
 
 ### Fase 3 — Parámetros
 - [ ] Temperatura, top-p y top-k — **Y**
 - [ ] Ventana de contexto **real configurada** (`num_ctx`) + conversación larga — **Y**
-- [ ] Cuantización: Q4_K_M vs Q8_0 — **Y**
+- [ ] Cuantización: `qwen3:4b-instruct-2507-q4_K_M` frente a `qwen3:4b-instruct-2507-q8_0` — **Y**
 - [ ] Máximo de tokens de salida — **Y**
 - [ ] Guía con definiciones, configuración, ejemplos y conclusiones → `modelos/parametros.md` — **Y**
-- [ ] Pendiente de la Fase 1: medir RAM y latencia de `qwen3.5:4b` con **64k de contexto**, que es el mínimo que piden OpenClaw y Hermes con modelos locales, frente al `num_ctx` elegido — **Y**
+- [ ] Pendiente de la Fase 1: medir RAM y latencia de `qwen3:4b-instruct-2507` con **64k de contexto**, que es el mínimo que piden OpenClaw y Hermes con modelos locales, frente al `num_ctx` elegido — **Y**
 
 ### Fase 4 — Agente + Telegram
 - [ ] Servicio `n8n` en `docker-compose.yml` conectado a `ollama` — **N**
@@ -186,7 +188,7 @@ git clone <repo>
 cd diogenes
 cp .env.example .env        # rellenar con tus credenciales locales
 docker compose up -d
-docker compose exec ollama ollama pull qwen3.5:4b
+docker compose exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M
 ```
 
 Ollama del contenedor desde el host:
