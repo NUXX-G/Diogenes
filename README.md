@@ -136,11 +136,11 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 | OpenCode | Agente de programación | Para justificar por qué **no** encaja |
 
 ### Fase 2 — Modelos locales
-- [ ] Ollama en contenedor con volumen para los pesos — **N**
-- [ ] Probar `qwen3.5:4b`, `qwen3:4b-instruct` y `llama3.2:3b` — **N+Y**
-- [ ] Batería común de prompts con **≥ 1 prueba de tool calling** — **Y**
-- [ ] Tabla de calidad, consistencia, velocidad, RAM/CPU y tool calling → `modelos/comparativa.md`
-- [ ] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados
+- [x] Ollama en contenedor con volumen para los pesos — **N**
+- [x] Probar `qwen3.5:4b`, `qwen3:4b-instruct` y `llama3.2:3b` — **N+Y**
+- [x] Batería común de prompts con **≥ 1 prueba de tool calling** — **Y**
+- [x] Tabla de calidad, consistencia, velocidad, RAM/CPU y tool calling → `modelos/comparativa.md`
+- [x] Confirmar `qwen3.5:4b` o justificar el cambio según los resultados (propuesta: cambiar a `qwen3:4b-instruct`, ver `modelos/comparativa.md`)
 
 ### Fase 3 — Parámetros
 - [ ] Temperatura, top-p y top-k — **Y**
