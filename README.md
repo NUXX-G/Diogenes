@@ -115,10 +115,10 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [x] Fijar el tag exacto de Ollama — **N** (`ollama/ollama:0.40.11`)
 
 ### Fase 1 — Investigación de agentes personales
-- [ ] Investigar ≥ 3 soluciones (≥ 2 agentes personales reales) — **N+Y**
-- [ ] Clasificar: asistente conversacional / agente personal / agente de programación / framework / automatización
-- [ ] Tabla comparativa con fuentes → `investigacion/comparativa-agentes.md`
-- [ ] Justificar la elección de n8n + MCP propio → `investigacion/decisiones.md`
+- [x] Investigar ≥ 3 soluciones (≥ 2 agentes personales reales) — **N+Y**
+- [x] Clasificar: asistente conversacional / agente personal / agente de programación / framework / automatización
+- [x] Tabla comparativa con fuentes → `investigacion/comparativa-agentes.md`
+- [x] Justificar la elección de n8n + MCP propio → `investigacion/decisiones.md`
 
 | Solución | Categoría | Por qué mirarla |
 |---|---|---|
