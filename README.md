@@ -107,12 +107,12 @@ Leyenda: `[ ]` pendiente · `[x]` hecho · **N** = Nelson · **Y** = Yeray · **
 - [ ] Crear repo remoto privado `diogenes` y dar acceso al profesor — **N**
 - [ ] Tablero Trello (TO DO / DOING / DONE) compartido en solo lectura con el profesor — **Y**
 - [ ] Flujo Git: `main` protegida, ramas `feat/…` y `docs/…`, PR revisada por el otro — **N+Y**
-- [ ] `.gitignore`, `.env.example` y estructura de carpetas — **N**
+- [x] `.gitignore`, `.env.example` y estructura de carpetas — **N**
 - [ ] Cuenta Google **exclusiva** del proyecto con datos ficticios (correos y eventos) — **Y**
 - [ ] Bot de Telegram con @BotFather (token solo en `.env` local) — **N**
 - [ ] Docker + WSL2 en el aula y en ambos portátiles, documentando el límite de memoria de WSL2 — **N+Y**
 - [ ] Bloqueos de red del centro (Telegram, Google OAuth, Docker Hub, Ollama) — **N+Y**
-- [ ] Fijar el tag exacto de Ollama — **N**
+- [x] Fijar el tag exacto de Ollama — **N** (`ollama/ollama:0.40.11`)
 
 ### Fase 1 — Investigación de agentes personales
 - [ ] Investigar ≥ 3 soluciones (≥ 2 agentes personales reales) — **N+Y**
@@ -178,6 +178,14 @@ cp .env.example .env        # rellenar con tus credenciales locales
 docker compose up -d
 docker compose exec ollama ollama pull qwen3.5:4b
 ```
+
+Ollama del contenedor desde el host:
+
+- Se publica en `http://127.0.0.1:11435` (configurable con `OLLAMA_HOST_PORT` en `.env`), no en el 11434 habitual.
+- Así no choca con un **Ollama nativo de Windows**, si lo tenéis instalado: ese sigue en el 11434.
+- La batería de pruebas de las Fases 2 y 3 debe apuntar al **11435**. Si apunta al 11434, estaréis midiendo el Ollama nativo y no el del contenedor.
+- Comprobación rápida: `curl http://127.0.0.1:11435/api/version` debe devolver la versión fijada en `docker-compose.yml`.
+- Dentro de Docker, n8n y `tools-mcp` usan `http://ollama:11434` por la red interna.
 
 Vista del simulador desde la Raspberry Pi 400:
 

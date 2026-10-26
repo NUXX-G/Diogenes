@@ -1,0 +1,124 @@
+# Diogenes — docker compose
+# Fase 0: solo se levanta ollama. El resto de servicios está comentado como
+# esqueleto y se activa en su fase (n8n en la 4; tools-mcp y casa-sim en la 5).
+#
+# Reglas (ver CLAUDE.md y README.md):
+#   - Puertos publicados solo en 127.0.0.1.
+#   - Imágenes con versión fijada, nunca :latest.
+#   - Sin /var/run/docker.sock ni el disco del host montados.
+
+name: diogenes
+
+services:
+  ollama:
+    # Tag verificado en Docker Hub el 26-10-2026 (última estable).
+    image: ollama/ollama:0.40.11
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama_models:/root/.ollama # pesos de los modelos, fuera del repo
+    ports:
+      # Solo para las pruebas de las Fases 2 y 3 desde el host.
+      # n8n y tools-mcp usan la red interna (http://ollama:11434).
+      # En el host se usa 11435 y no 11434 para no chocar con un Ollama nativo
+      # de Windows (y no probar contra él por error).
+      - "127.0.0.1:${OLLAMA_HOST_PORT:-11435}:11434"
+    networks:
+      - diogenes
+    # qwen3.5:4b en Q8_0 ocupa ~5 GB más el contexto. Pensado para 16 GB de RAM.
+    mem_limit: 6g
+    healthcheck:
+      # La imagen no trae curl; `ollama list` falla si el servidor no responde.
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # n8n:                                       # Fase 4
+  #   image: n8nio/n8n:2.42.7                  # tag verificado el 26-10-2026
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: ${TZ:-Europe/Madrid}
+  #     GENERIC_TIMEZONE: ${TZ:-Europe/Madrid}
+  #     N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Falta N8N_ENCRYPTION_KEY en .env}
+  #     TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS}
+  #   volumes:
+  #     - n8n_data:/home/node/.n8n
+  #   ports:
+  #     - "127.0.0.1:5678:5678"
+  #   networks:
+  #     - diogenes
+  #   mem_limit: 1g
+  #   healthcheck:
+  #     # TODO: verificar que la imagen trae wget y que /healthz sigue existiendo.
+  #     test: ["CMD", "wget", "-qO-", "http://localhost:5678/healthz"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 5
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #     tools-mcp:
+  #       condition: service_healthy
+
+  # tools-mcp:                                 # Fase 5
+  #   build: ./docker/tools-mcp                # python:*-slim con tag fijado, usuario no root
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: ${TZ:-Europe/Madrid}
+  #     GOOGLE_OAUTH_CLIENT_FILE: ${GOOGLE_OAUTH_CLIENT_FILE}
+  #     GOOGLE_OAUTH_TOKEN_FILE: ${GOOGLE_OAUTH_TOKEN_FILE}
+  #     CONFIRM_TOKEN_SECRET: ${CONFIRM_TOKEN_SECRET:?Falta CONFIRM_TOKEN_SECRET en .env}
+  #     CONFIRM_TOKEN_TTL_SECONDS: ${CONFIRM_TOKEN_TTL_SECONDS:-300}
+  #     TAREAS_DB_PATH: ${TAREAS_DB_PATH:-/data/tareas.db}
+  #     CASA_SIM_URL: ${CASA_SIM_URL:-http://casa-sim:8080}
+  #   volumes:
+  #     - tools_data:/data
+  #     - ./secrets:/secrets:ro                # credenciales OAuth, ignoradas por Git
+  #   # Sin puertos publicados: n8n le habla por la red interna.
+  #   networks:
+  #     - diogenes
+  #   mem_limit: 512m
+  #   healthcheck:
+  #     test: ["CMD", "python", "-c", "TODO: comprobación de salud"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 5
+  #   depends_on:
+  #     casa-sim:
+  #       condition: service_healthy
+
+  # casa-sim:                                  # Fase 5
+  #   build: ./docker/casa-sim
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: ${TZ:-Europe/Madrid}
+  #     CASA_DB_PATH: ${CASA_DB_PATH:-/data/casa.db}
+  #   volumes:
+  #     - casa_data:/data
+  #   ports:
+  #     - "127.0.0.1:8080:8080"                # vista web (la Pi entra por túnel SSH)
+  #   networks:
+  #     - diogenes
+  #   mem_limit: 256m
+  #   healthcheck:
+  #     test: ["CMD", "python", "-c", "TODO: comprobación de salud"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 5
+
+networks:
+  diogenes:
+    # Red bridge normal (no `internal: true`): ollama tiene que descargar
+    # modelos y, más adelante, n8n y tools-mcp hablan con Telegram y Google.
+    name: diogenes
+
+volumes:
+  ollama_models:
+  # n8n_data:
+  # tools_data:
+  # casa_data:

@@ -1,0 +1,20 @@
+# Hooks que se ejecutan antes de cada commit.
+# Instalación (una vez por equipo): pip install pre-commit && pre-commit install
+# Probar sobre todo el repo:        pre-commit run --all-files
+
+repos:
+  # Bloquea secretos (tokens de Telegram, claves de Google, etc.).
+  # El hook `gitleaks` compila gitleaks con Go la primera vez; pre-commit
+  # descarga Go si no está instalado. Versión verificada el 26-10-2026.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # Bloquea archivos de más de 25 MiB (vídeos de demo, modelos...).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=25600"]
+      - id: detect-private-key
