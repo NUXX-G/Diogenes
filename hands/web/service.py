@@ -98,7 +98,7 @@ class WebService:
             self._store.record_success(key)
             return {
                 "ok": True,
-                "mensaje": f"Búsqueda en {site} (plantilla aprendida)",
+                "mensaje": f"Resultados de {site} abiertos en el navegador (plantilla aprendida)",
                 "url": url,
                 "origen": "aprendida",
             }
@@ -118,7 +118,12 @@ class WebService:
                 continue
             self._store.save(key, page.url, template, strategy.name)
             self._open(url)
-            return {"ok": True, "mensaje": f"Búsqueda en {site} ({strategy.name})", "url": url, "origen": strategy.name}
+            return {
+                "ok": True,
+                "mensaje": f"Resultados de {site} abiertos en el navegador ({strategy.name})",
+                "url": url,
+                "origen": strategy.name,
+            }
 
         return {
             "ok": False,
