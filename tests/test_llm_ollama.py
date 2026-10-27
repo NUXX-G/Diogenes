@@ -31,6 +31,7 @@ async def test_envia_modelo_herramientas_y_thinking_desactivado() -> None:
     body = visto["body"]
     assert (body["model"], body["stream"], body["think"]) == ("modelo-x", False, False)
     assert body["tools"][0]["function"]["name"] == "apps_search"
+    assert body["options"]["num_predict"] == 512  # generación acotada
 
 
 async def test_interpreta_llamadas_a_herramientas_con_argumentos_dict_o_texto() -> None:

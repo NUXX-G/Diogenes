@@ -39,6 +39,10 @@ async def repl(
             continue
         if line.lower() in SALIR:
             return
+        if line.lower() == "/nuevo":
+            agent.reset()
+            write("Conversación reiniciada.")
+            continue
         try:
             result = await agent.run(line)
         except LLMError as exc:
@@ -81,7 +85,7 @@ async def amain() -> int:
             )
             return 1
         agent = Agent(llm, tools, confirm=confirm, on_step=lambda s: print(format_step(s)))
-        print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar.")
+        print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar o '/nuevo' para olvidar la conversación.")
         try:
             await repl(agent, read, print)
         finally:

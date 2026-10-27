@@ -43,12 +43,14 @@ class OllamaProvider:
         *,
         temperature: float = 0.2,
         num_ctx: int = 8192,
+        max_tokens: int = 512,
         timeout: float = 300.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self._options = {"temperature": temperature, "num_ctx": num_ctx}
+        # num_predict acota la generación: un bucle del modelo no puede quedarse horas (ni cientos de llamadas)
+        self._options = {"temperature": temperature, "num_ctx": num_ctx, "num_predict": max_tokens}
         self._client = client or httpx.AsyncClient(timeout=timeout)
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
