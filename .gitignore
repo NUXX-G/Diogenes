@@ -56,3 +56,6 @@ Desktop.ini
 
 # --- Claude Code (ajustes locales) ---
 .claude/settings.local.json
+
+# --- Registro de acciones (modo personal) ---
+logs/
