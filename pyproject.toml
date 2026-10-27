@@ -5,6 +5,7 @@ description = "Asistente personal con IA local que controla el PC (modo personal
 requires-python = "==3.12.*"
 dependencies = [
     "httpx==0.28.1",
+    "httpx2==2.16.0",
     "mcp==2.3.0",
     "python-dotenv==1.2.4",
     "rapidfuzz==3.14.6",
