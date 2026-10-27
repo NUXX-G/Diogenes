@@ -24,7 +24,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from hands.actionlog import ActionLog
 from hands.apps import discovery, launcher
-from hands.apps.index import AppIndex
+from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
@@ -34,6 +34,7 @@ log = logging.getLogger("hands")
 
 HOST = "127.0.0.1"
 REFRESH_SECONDS = 15 * 60
+MAX_OPCIONES = 3  # si hay que preguntar, nunca más de tres opciones
 
 
 class TokenAuthMiddleware:
@@ -81,16 +82,36 @@ def build_server(
         name="apps.search",
         description=(
             "Busca aplicaciones y juegos instalados en el equipo por nombre (tolera erratas). "
-            "Devuelve candidatos con su id; pásalo a apps.launch para abrirlo."
+            "Devuelve candidatos con su id y ganador_claro: si es true, lanza id_ganador sin preguntar; "
+            "si es false, hay un empate y se ofrecen opciones numeradas."
         ),
     )
     async def apps_search(nombre: str, limite: int = 5) -> dict[str, Any]:
         async def run() -> dict[str, Any]:
             found = index.search(nombre, limit=max(1, min(limite, 10)))
+            items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
+            if not found:
+                return {"ok": True, "mensaje": "0 resultados", "ganador_claro": False, "resultados": []}
+            if hay_ganador_claro(found):
+                return {
+                    "ok": True,
+                    "mensaje": f"{len(found)} resultados; ganador claro: {found[0].entry.name}",
+                    "ganador_claro": True,
+                    "id_ganador": found[0].entry.id,
+                    "instruccion": (
+                        "Hay un ganador claro, no preguntes. La app AÚN NO está abierta: el siguiente paso es llamar a "
+                        "apps.launch con id=id_ganador."
+                    ),
+                    "resultados": items,
+                }
+            opciones = [{"n": n, **item} for n, item in enumerate(items[:MAX_OPCIONES], start=1)]
             return {
                 "ok": True,
-                "mensaje": f"{len(found)} resultados",
-                "resultados": [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found],
+                "mensaje": f"empate entre {len(opciones)} opciones",
+                "ganador_claro": False,
+                "instruccion": "Empate real: pregunta al usuario cuál de las opciones numeradas quiere.",
+                "opciones": opciones,
+                "resultados": items[:MAX_OPCIONES],
             }
 
         return await audited("apps.search", {"nombre": nombre, "limite": limite}, run)

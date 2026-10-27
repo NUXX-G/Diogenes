@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from hands.apps.models import AppEntry, es_ruido
+from hands.apps.models import AppEntry, es_ruido, short_id
 
 SOURCE = "startmenu"
 
@@ -18,5 +18,5 @@ def scan(roots: Iterable[Path]) -> list[AppEntry]:
         for lnk in sorted(root.rglob("*.lnk")):
             if es_ruido(lnk.stem):
                 continue
-            entries.append(AppEntry(f"{SOURCE}:{lnk}", lnk.stem, SOURCE, "file", str(lnk)))
+            entries.append(AppEntry(short_id(SOURCE, str(lnk)), lnk.stem, SOURCE, "file", str(lnk)))
     return entries
