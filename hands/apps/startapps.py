@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from hands.apps.models import AppEntry, es_ruido
+from hands.apps.models import AppEntry, es_ruido, short_id
 
 SOURCE = "startapps"
 _ES_URI = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
@@ -30,5 +30,5 @@ def parse(output: str) -> list[AppEntry]:
             continue
         # Los accesos .url (p. ej. juegos de Steam) aparecen con una URI como AppID: se abre como protocolo.
         kind = "uri" if _ES_URI.match(app_id) else "shell"
-        entries.append(AppEntry(f"{SOURCE}:{app_id}", name, SOURCE, kind, app_id))
+        entries.append(AppEntry(short_id(SOURCE, app_id), name, SOURCE, kind, app_id))
     return entries

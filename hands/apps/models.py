@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -20,6 +21,11 @@ class AppEntry:
     source: str
     launch_kind: LaunchKind
     target: str
+
+
+def short_id(source: str, key: str) -> str:
+    """Id corto y estable. Los AppID de Windows miden decenas de caracteres y un modelo pequeño los deforma al copiarlos."""
+    return f"{source}:{hashlib.sha1(key.encode()).hexdigest()[:8]}"
 
 
 def normalize(text: str) -> str:

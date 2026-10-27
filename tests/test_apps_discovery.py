@@ -102,3 +102,11 @@ def test_epic_construye_uri_de_lanzamiento(tmp_path: Path) -> None:
 
 def test_epic_directorio_inexistente(tmp_path: Path) -> None:
     assert epic.scan(tmp_path / "nada") == []
+
+
+def test_ids_cortos_y_estables() -> None:
+    entradas = startapps.parse((FIXTURES / "get_startapps.json").read_text(encoding="utf-8"))
+    otra_vez = startapps.parse((FIXTURES / "get_startapps.json").read_text(encoding="utf-8"))
+    assert [e.id for e in entradas] == [e.id for e in otra_vez]
+    assert len({e.id for e in entradas}) == len(entradas)
+    assert all(len(e.id) == len("startapps:") + 8 for e in entradas)

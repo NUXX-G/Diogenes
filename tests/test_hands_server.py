@@ -89,3 +89,38 @@ def test_http_sin_token_o_con_token_malo_da_401(index: AppIndex) -> None:
         assert http.post("/mcp", json={}, headers={"Authorization": "secreto"}).status_code == 401
         # con el token correcto la petición llega al servidor MCP (que rechaza el cuerpo vacío, pero no con 401)
         assert http.post("/mcp", json={}, headers={"Authorization": "Bearer secreto"}).status_code != 401
+
+
+# --- apps.search: ganador claro y empates -------------------------------------------------------------------
+
+
+def entrada(nombre: str, source: str = "startapps") -> AppEntry:
+    return AppEntry(f"{source}:{nombre}", nombre, source, "shell", nombre)
+
+
+async def buscar(index: AppIndex, nombre: str) -> dict[str, Any]:
+    async with Client(hands_server.build_server(index)) as client:
+        return texto(await client.call_tool("apps.search", {"nombre": nombre}))
+
+
+async def test_search_con_ganador_claro_lo_indica_y_no_ofrece_opciones() -> None:
+    idx = AppIndex()
+    idx.replace([entrada("Spotify"), entrada("spotify_cli", "registry")])
+    r = await buscar(idx, "spotify")
+    assert r["ganador_claro"] is True and r["id_ganador"] == "startapps:Spotify"
+    assert "no preguntes" in r["instruccion"].lower() and "aún no está abierta" in r["instruccion"].lower()
+    assert "opciones" not in r
+
+
+async def test_search_con_empate_ofrece_como_maximo_tres_opciones_numeradas() -> None:
+    idx = AppIndex()
+    idx.replace([entrada(f"Discord {v}") for v in ("Canary", "PTB", "Dev", "Beta")])
+    r = await buscar(idx, "discord")
+    assert r["ganador_claro"] is False and "id_ganador" not in r
+    assert [o["n"] for o in r["opciones"]] == [1, 2, 3]
+    assert len(r["resultados"]) == 3
+
+
+async def test_search_sin_resultados() -> None:
+    r = await buscar(AppIndex(), "zzzzqqq")
+    assert r["ganador_claro"] is False and r["resultados"] == [] and "opciones" not in r

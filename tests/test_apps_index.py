@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from hands.apps import discovery, launcher
-from hands.apps.index import AppIndex
+from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry, normalize
 
 
@@ -108,3 +108,50 @@ def test_discover_une_fuentes_y_una_caida_no_tumba_a_las_demas(
 def test_discover_fuera_de_windows_no_hace_nada(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(discovery, "_es_windows", lambda: False)
     assert discovery.discover(lambda _c: pytest.fail("no debe llamar a PowerShell")) == []
+
+
+# --- Ranking y desambiguación -------------------------------------------------------------------------------
+
+
+def indice(*apps: AppEntry) -> AppIndex:
+    idx = AppIndex()
+    idx.replace(apps)
+    return idx
+
+
+def test_exacta_gana_a_prefijo_aunque_el_prefijo_tenga_interfaz() -> None:
+    idx = indice(app("Spotify"), app("spotify_cli", "registry", "file", "spotify_cli.exe"))
+    r = idx.search("spotify")
+    assert [x.entry.name for x in r][:2] == ["Spotify", "spotify_cli"]
+    assert (r[0].tier, r[1].tier) == (0, 1)
+    assert hay_ganador_claro(r)
+
+
+def test_prefijo_gana_a_difusa() -> None:
+    idx = indice(app("Brawlhalla Launcher", "steam", "uri", "x"), app("Brawlhala Toolz"), app("Brawlhalla Wiki"))
+    r = idx.search("brawlhalla")
+    assert r[0].tier == 1 and all(x.tier >= r[0].tier for x in r)
+
+
+def test_a_igualdad_gana_la_app_con_interfaz_sobre_app_paths() -> None:
+    idx = indice(app("Foo Tool", "registry", "file", "foo.exe"), app("Foo Pro"))
+    r = idx.search("foo")
+    assert [x.entry.name for x in r] == ["Foo Pro", "Foo Tool"]
+    assert hay_ganador_claro(r)  # la interfaz desempata: no hace falta preguntar
+
+
+def test_empate_real_no_es_ganador_claro() -> None:
+    idx = indice(app("Discord Canary"), app("Discord PTB"))
+    r = idx.search("discord")
+    assert r[0].tier == r[1].tier == 1 and r[0].con_interfaz and r[1].con_interfaz
+    assert not hay_ganador_claro(r)
+
+
+def test_ganador_claro_sin_resultados_o_con_uno() -> None:
+    assert not hay_ganador_claro([])
+    assert hay_ganador_claro(indice(app("Unica")).search("unica"))
+
+
+def test_exacta_ignora_mayusculas_y_acentos() -> None:
+    r = indice(app("Configuración"), app("Configuración avanzada")).search("CONFIGURACION")
+    assert r[0].entry.name == "Configuración" and r[0].tier == 0
