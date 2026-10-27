@@ -1,0 +1,12 @@
+{
+  "herramientas": [
+    "files.delete",
+    "files.move",
+    "window.force_close",
+    "messages.send",
+    "software.install",
+    "software.uninstall",
+    "shell.run",
+    "settings.change"
+  ]
+}
