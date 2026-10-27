@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import threading
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from rapidfuzz import fuzz, process
 
@@ -20,6 +23,8 @@ SCORE_MINIMO = 72.0
 MARGEN_CLARO = 5.0
 
 EXACTA, PREFIJO, DIFUSA = 0, 1, 2
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,24 @@ def _tier(query: str, name: str) -> int:
     if name.startswith(query) or f" {query} " in f" {name} ":
         return PREFIJO
     return DIFUSA
+
+
+def _resolver_colisiones(entries: Iterable[AppEntry]) -> dict[str, AppEntry]:
+    """Indexa por id. Si dos apps distintas comparten id (colisión del hash corto), ninguna pisa a la otra: las dos
+    pasan a un id largo derivado de lo que las distingue (tipo, destino y nombre), independiente del orden."""
+    grupos: dict[str, list[AppEntry]] = defaultdict(list)
+    for entry in entries:
+        grupos[entry.id].append(entry)
+    by_id: dict[str, AppEntry] = {}
+    for app_id, grupo in grupos.items():
+        if len(grupo) == 1:
+            by_id[app_id] = grupo[0]
+            continue
+        log.warning("colisión de id '%s' entre %s: se usan ids largos", app_id, [e.name for e in grupo])
+        for entry in grupo:
+            largo = hashlib.sha1(f"{entry.launch_kind}|{entry.target}|{entry.name}".encode()).hexdigest()[:16]
+            by_id[f"{entry.source}:{largo}"] = replace(entry, id=f"{entry.source}:{largo}")
+    return by_id
 
 
 def hay_ganador_claro(resultados: Sequence[Resultado]) -> bool:
@@ -76,7 +99,7 @@ class AppIndex:
             actual = best.get(key)
             if actual is None or _prioridad(entry.source) < _prioridad(actual.source):
                 best[key] = entry
-        by_id = {e.id: e for e in best.values()}
+        by_id = _resolver_colisiones(best.values())
         names = {e.id: normalize(e.name) for e in by_id.values()}
         with self._lock:
             self._entries, self._names = by_id, names
@@ -85,7 +108,8 @@ class AppIndex:
         return self._entries.get(app_id)
 
     def search(self, query: str, limit: int = 5, score_minimo: float = SCORE_MINIMO) -> list[Resultado]:
-        """Orden: coincidencia exacta > prefijo/palabra > difusa; a igualdad, con interfaz; luego puntuación."""
+        """Orden: coincidencias (exacta/prefijo/palabra) antes que difusas; entre las coincidencias, las apps con
+        interfaz antes que App Paths (así 'chrome' abre Google Chrome, no chrome.exe suelto); luego exacta > prefijo."""
         wanted = normalize(query)
         if not wanted:
             return []
@@ -94,6 +118,13 @@ class AppIndex:
         matches = process.extract(wanted, names, scorer=fuzz.WRatio, limit=None, score_cutoff=score_minimo)
         resultados = [Resultado(entries[app_id], score, _tier(wanted, names[app_id])) for _n, score, app_id in matches]
         resultados.sort(
-            key=lambda r: (r.tier, not r.con_interfaz, -r.score, _prioridad(r.entry.source), len(r.entry.name))
+            key=lambda r: (
+                0 if r.tier <= PREFIJO else 1,
+                not r.con_interfaz,
+                r.tier,
+                -r.score,
+                _prioridad(r.entry.source),
+                len(r.entry.name),
+            )
         )
         return resultados[:limit]

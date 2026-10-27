@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -155,3 +156,78 @@ def test_ganador_claro_sin_resultados_o_con_uno() -> None:
 def test_exacta_ignora_mayusculas_y_acentos() -> None:
     r = indice(app("Configuración"), app("Configuración avanzada")).search("CONFIGURACION")
     assert r[0].entry.name == "Configuración" and r[0].tier == 0
+
+
+# --- La preferencia por interfaz se aplica entre coincidencias de distinto nivel -----------------------------
+
+
+def test_chrome_abre_la_app_del_menu_inicio_y_no_el_ejecutable_suelto() -> None:
+    idx = indice(app("chrome", "registry", "file", r"C:\chrome.exe"), app("Google Chrome", target="Chrome"))
+    r = idx.search("chrome")
+    assert [x.entry.source for x in r][:2] == ["startapps", "registry"]
+    assert (r[0].tier, r[1].tier) == (1, 0)  # la de Inicio coincide por palabra; la de App Paths, exacta
+    assert hay_ganador_claro(r)
+
+
+def test_una_difusa_con_interfaz_no_adelanta_a_una_exacta_sin_ella() -> None:
+    idx = indice(app("chrome", "registry", "file", r"C:\chrome.exe"), app("Chrom Edge Tools"))
+    r = idx.search("chrome")
+    assert r[0].entry.source == "registry"
+
+
+def test_entre_coincidencias_con_interfaz_sigue_ganando_la_exacta() -> None:
+    idx = indice(app("Discord Canary"), app("Discord"))
+    assert [x.entry.name for x in idx.search("discord")][:2] == ["Discord", "Discord Canary"]
+
+
+# --- Ids: estables entre procesos y reconstrucciones; colisiones detectadas ------------------------------------
+
+
+def test_ids_estables_entre_procesos_con_distinta_semilla_de_hash() -> None:
+    import os
+    import subprocess
+
+    codigo = (
+        "from pathlib import Path; from hands.apps import startapps; "
+        "print([e.id for e in startapps.parse(Path('tests/fixtures/get_startapps.json').read_text(encoding='utf-8'))])"
+    )
+    raiz = Path(__file__).parent.parent
+    salidas = {
+        subprocess.run(
+            [sys.executable, "-c", codigo],
+            cwd=raiz,
+            env={**os.environ, "PYTHONHASHSEED": semilla, "PYTHONPATH": str(raiz)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for semilla in ("1", "2", "random")
+    }
+    assert len(salidas) == 1 and "startapps:56217f42" in salidas.pop()
+
+
+def test_reconstruir_el_indice_conserva_los_ids() -> None:
+    entradas = [app("Spotify", target="SpotifyAB!Spotify"), app("Discord", target="Discord")]
+    idx = AppIndex()
+    idx.replace(entradas)
+    antes = {e.name: e.id for e in (idx.get(f"startapps:{e.name}") for e in entradas) if e}
+    idx.replace(reversed(entradas))
+    despues = {r.entry.name: r.entry.id for n in ("spotify", "discord") for r in idx.search(n)[:1]}
+    assert antes == despues
+
+
+def test_colision_de_hash_no_pisa_ninguna_app_y_no_depende_del_orden(caplog: pytest.LogCaptureFixture) -> None:
+    a = AppEntry("startapps:deadbeef", "Alfa", "startapps", "shell", "AlfaApp!App")
+    b = AppEntry("startapps:deadbeef", "Beta", "startapps", "shell", "BetaApp!App")
+    resultados = []
+    for orden in ([a, b], [b, a]):
+        idx = AppIndex()
+        with caplog.at_level(logging.WARNING):
+            idx.replace(orden)
+        alfa, beta = idx.search("alfa")[0].entry, idx.search("beta")[0].entry
+        assert (alfa.target, beta.target) == ("AlfaApp!App", "BetaApp!App")
+        assert alfa.id != beta.id and "deadbeef" not in alfa.id + beta.id
+        assert idx.get(alfa.id) == alfa and idx.get("startapps:deadbeef") is None  # el id corto ambiguo ya no existe
+        resultados.append((alfa.id, beta.id))
+    assert resultados[0] == resultados[1]  # mismos ids con cualquier orden: las recetas pueden fiarse
+    assert "colisión de id" in caplog.text
