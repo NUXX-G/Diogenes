@@ -127,10 +127,10 @@ Damos control amplio, pero con estas reglas que no se negocian:
 - **Voz**: `openWakeWord`, `faster-whisper`, `piper-tts`, `sounddevice`, `webrtcvad` o `silero-vad`.
 - **Búsqueda difusa**: `rapidfuzz`.
 - **Overlay**: `PySide6` (ventana transparente, siempre encima, sin marco).
-- **LLM**: Ollama con `qwen3:4b-instruct` (Qwen3 Instruct 2507, `q4_K_M`) como modelo principal; configurable con `OLLAMA_MODEL`. `qwen3.5:4b` queda como alternativa (es el que tiene visión, necesaria para el escalón 6). Modo thinking desactivado para las acciones.
+- **LLM**: Ollama con `qwen3:4b-instruct` (Qwen3 Instruct 2507, `q4_K_M`) como modelo principal; configurable con `DIOGENES_OLLAMA_MODEL`. `qwen3.5:4b` queda como alternativa (es el que tiene visión, necesaria para el escalón 6). Modo thinking desactivado para las acciones.
   - **Por qué no `qwen3.5:4b` por defecto**: en la batería de la PR #1 llamó a una herramienta inyectada desde un correo (`qwen3:4b-instruct` resistió 3/3, `qwen3.5:4b` 0/3). En modo personal el agente controla el PC, así que el riesgo pesa más. Detalle en [`modelos/comparativa.md`](modelos/comparativa.md).
   - **Ningún modelo es la defensa contra inyecciones.** La barrera real es la confirmación impuesta en código para las acciones irreversibles (ver Seguridad mínima); elegir un modelo más resistente no la relaja.
-- **Ollama**: `OLLAMA_BASE_URL` configurable. En modo personal el valor por defecto es `http://127.0.0.1:11434` (Ollama nativo); el del compose (puerto `11435` del anfitrión) no se toca.
+- **Ollama**: `DIOGENES_OLLAMA_BASE_URL` configurable. En modo personal el valor por defecto es `http://127.0.0.1:11434` (Ollama nativo); el del compose (puerto `11435` del anfitrión) no se toca. Llevan el prefijo `DIOGENES_` porque `OLLAMA_MODEL` y `OLLAMA_BASE_URL` del `.env` ya los usa el stack Docker con otros valores.
 - Versiones fijadas en `pyproject.toml` y `uv.lock`. Nada de rangos abiertos.
 
 ## Estructura del repo
