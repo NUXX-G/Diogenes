@@ -142,6 +142,7 @@ dependencies = [
     { name = "mcp" },
     { name = "python-dotenv" },
     { name = "rapidfuzz" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -157,6 +158,7 @@ requires-dist = [
     { name = "mcp", specifier = "==2.3.0" },
     { name = "python-dotenv", specifier = "==1.2.4" },
     { name = "rapidfuzz", specifier = "==3.14.6" },
+    { name = "uvicorn", specifier = "==0.54.0" },
 ]
 
 [package.metadata.requires-dev]
