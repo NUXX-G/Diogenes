@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 
 from hands.apps.models import AppEntry, es_ruido
 
 SOURCE = "startapps"
+_ES_URI = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 POWERSHELL_COMMAND = (
     "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
     "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"
@@ -26,5 +28,7 @@ def parse(output: str) -> list[AppEntry]:
         name, app_id = (item.get("Name") or "").strip(), (item.get("AppID") or "").strip()
         if not app_id or es_ruido(name):
             continue
-        entries.append(AppEntry(f"{SOURCE}:{app_id}", name, SOURCE, "shell", app_id))
+        # Los accesos .url (p. ej. juegos de Steam) aparecen con una URI como AppID: se abre como protocolo.
+        kind = "uri" if _ES_URI.match(app_id) else "shell"
+        entries.append(AppEntry(f"{SOURCE}:{app_id}", name, SOURCE, kind, app_id))
     return entries

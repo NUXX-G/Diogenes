@@ -12,7 +12,8 @@ from hands.apps.models import AppEntry, normalize
 
 # Si dos fuentes dan la misma app, gana la primera: es la que Windows o el cliente de juegos usan de verdad.
 PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "registry")
-SCORE_MINIMO = 60.0
+# Con WRatio el ruido (nombres cortos que "contienen" la consulta) llega a ~67; los aciertos reales, a 90+.
+SCORE_MINIMO = 72.0
 
 
 @dataclass(frozen=True)
