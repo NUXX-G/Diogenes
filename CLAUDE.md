@@ -53,8 +53,8 @@ Regla: **nada del modo personal puede romper el modo clase**. La demo del 11 de 
                  ┌─────────────────────┼─────────────────────┐
                  ▼                     ▼                     ▼
           hands-mcp (anfitrión)   tools-mcp (Docker)     ollama (Docker)
-          apps, web, UI, pantalla Gmail, Calendar,       qwen3.5:4b
-          sistema, multimedia     tareas, casa-sim       (texto + visión)
+          apps, web, UI, pantalla Gmail, Calendar,       qwen3:4b-instruct
+          sistema, multimedia     tareas, casa-sim       (texto)         
 ```
 
 - `hands-mcp` corre **fuera de Docker** porque necesita el escritorio de Windows. Escucha solo en `127.0.0.1` y exige un token compartido.
@@ -127,7 +127,10 @@ Damos control amplio, pero con estas reglas que no se negocian:
 - **Voz**: `openWakeWord`, `faster-whisper`, `piper-tts`, `sounddevice`, `webrtcvad` o `silero-vad`.
 - **Búsqueda difusa**: `rapidfuzz`.
 - **Overlay**: `PySide6` (ventana transparente, siempre encima, sin marco).
-- **LLM**: Ollama con `qwen3.5:4b` (tool calling y visión). Modo thinking desactivado para las acciones.
+- **LLM**: Ollama con `qwen3:4b-instruct` (Qwen3 Instruct 2507, `q4_K_M`) como modelo principal; configurable con `OLLAMA_MODEL`. `qwen3.5:4b` queda como alternativa (es el que tiene visión, necesaria para el escalón 6). Modo thinking desactivado para las acciones.
+  - **Por qué no `qwen3.5:4b` por defecto**: en la batería de la PR #1 llamó a una herramienta inyectada desde un correo (`qwen3:4b-instruct` resistió 3/3, `qwen3.5:4b` 0/3). En modo personal el agente controla el PC, así que el riesgo pesa más. Detalle en [`modelos/comparativa.md`](modelos/comparativa.md).
+  - **Ningún modelo es la defensa contra inyecciones.** La barrera real es la confirmación impuesta en código para las acciones irreversibles (ver Seguridad mínima); elegir un modelo más resistente no la relaja.
+- **Ollama**: `OLLAMA_BASE_URL` configurable. En modo personal el valor por defecto es `http://127.0.0.1:11434` (Ollama nativo); el del compose (puerto `11435` del anfitrión) no se toca.
 - Versiones fijadas en `pyproject.toml` y `uv.lock`. Nada de rangos abiertos.
 
 ## Estructura del repo
@@ -201,7 +204,10 @@ Todo el overlay es opcional y se desactiva desde la bandeja del sistema.
 # Modo clase (stack Docker)
 cp .env.example .env
 docker compose up -d
-docker compose exec ollama ollama pull qwen3.5:4b
+docker compose exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M
+
+# Ollama nativo del modo personal
+ollama pull qwen3:4b-instruct
 
 # Modo personal (anfitrión Windows, PowerShell o Git Bash)
 uv sync
