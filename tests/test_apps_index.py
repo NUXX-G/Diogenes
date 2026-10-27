@@ -45,6 +45,9 @@ def test_busqueda_ignora_acentos(index: AppIndex) -> None:
 
 
 def test_sin_coincidencias_devuelve_vacio(index: AppIndex) -> None:
+    idx = AppIndex()
+    idx.replace([app("py", "registry", "file", "py.exe")])
+    assert idx.search("spotify") == []  # un nombre corto no cuenta como acierto
     assert index.search("zzzzqqq") == []
     assert index.search("   ") == []
 

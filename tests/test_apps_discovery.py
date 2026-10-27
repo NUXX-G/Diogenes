@@ -18,10 +18,12 @@ def test_vdf_anidado_y_escapes() -> None:
 def test_get_startapps_filtra_ruido_y_vacios() -> None:
     entradas = startapps.parse((FIXTURES / "get_startapps.json").read_text(encoding="utf-8"))
     nombres = [e.name for e in entradas]
-    assert nombres == ["Spotify", "Calculadora", "Google Chrome", "Word", "Configuración"]
+    assert nombres == ["Spotify", "Calculadora", "Google Chrome", "Word", "Configuración", "Brawlhalla"]
     spotify = entradas[0]
     assert spotify.launch_kind == "shell"
     assert spotify.target == "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
+    brawlhalla = entradas[-1]  # acceso .url de Steam: el AppID es una URI
+    assert (brawlhalla.launch_kind, brawlhalla.target) == ("uri", "steam://rungameid/291550")
 
 
 def test_get_startapps_un_solo_resultado_es_objeto() -> None:
