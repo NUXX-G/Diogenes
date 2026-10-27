@@ -1,0 +1,29 @@
+[project]
+name = "diogenes"
+version = "0.1.0"
+description = "Asistente personal con IA local que controla el PC (modo personal)"
+requires-python = "==3.12.*"
+dependencies = [
+    "httpx==0.28.1",
+    "httpx2==2.16.0",
+    "mcp==2.3.0",
+    "python-dotenv==1.2.4",
+    "rapidfuzz==3.14.6",
+    "uvicorn==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1",
+    "ruff==0.17.3",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

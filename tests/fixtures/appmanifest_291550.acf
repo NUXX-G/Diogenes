@@ -1,0 +1,13 @@
+"AppState"
+{
+	"appid"		"291550"
+	"Universe"		"1"
+	"name"		"Brawlhalla"
+	"StateFlags"		"4"
+	"installdir"		"Brawlhalla"
+	"LastUpdated"		"1761500000"
+	"UserConfig"
+	{
+		"language"		"spanish"
+	}
+}
