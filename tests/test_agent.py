@@ -178,3 +178,189 @@ async def test_repl_muestra_respuesta_y_sobrevive_a_un_error_del_modelo() -> Non
 
     await repl(Agent(Roto(), FakeBackend(), policy=POLICY), read, salidas.append)
     assert salidas == ["Error del modelo: Ollama apagado"]
+
+
+# --- Memoria de conversación y elecciones --------------------------------------------------------------------
+
+
+def indice_discord() -> AppIndex:
+    idx = AppIndex()
+    idx.replace(
+        [AppEntry(f"startapps:D{v}", f"Discord {v}", "startapps", "shell", f"D{v}") for v in ("Canary", "PTB", "Dev")]
+    )
+    return idx
+
+
+def usuario_de(messages: list[Message]) -> list[str]:
+    return [m.content for m in messages if m.role == "user"]
+
+
+async def test_secuencia_del_fallo_original_con_empate_y_eleccion_posterior() -> None:
+    lanzadas: list[AppEntry] = []
+    segunda_opcion = indice_discord().search("discord")[1].entry  # la opción 2 que verá el usuario
+    llm = FakeLLM(
+        # turno 1: "abre discord" → empate → el modelo pregunta
+        llamar("apps_search", nombre="discord"),
+        decir("¿Cuál? 1. Discord Canary 2. Discord PTB 3. Discord Dev"),
+        # turno 2: "el segundo" → se resuelve en código, el modelo solo lanza
+        llamar("apps_launch", id=segunda_opcion.id),
+        decir("Abierto."),
+    )
+    async with Client(build_server(indice_discord(), launch=lanzadas.append)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY)
+        primera = await agente.run("abre discord")
+        segunda = await agente.run("el segundo")
+
+    assert primera.answer.startswith("¿Cuál?")
+    assert segunda.answer == "Abierto."
+    assert [e.id for e in lanzadas] == [segunda_opcion.id]
+    # al modelo le llega la petición original + la opción ya resuelta, no un "el segundo" huérfano
+    turno2 = llm.seen[2]
+    assert usuario_de(turno2)[0] == "abre discord"
+    assert "opción 2" in usuario_de(turno2)[1] and segunda_opcion.id in usuario_de(turno2)[1]
+    # y ve todo lo anterior: su búsqueda, el resultado con las opciones y su pregunta
+    roles = [m.role for m in turno2]
+    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert "opciones" in turno2[3].content
+
+
+async def test_la_app_y_el_primero_con_historial_no_vuelven_a_buscar_desde_cero() -> None:
+    llm = FakeLLM(
+        llamar("apps_search", nombre="discord"),
+        decir("¿Cuál? 1. Canary 2. PTB 3. Dev"),
+        decir("¿Te refieres a Discord Canary o a Discord PTB?"),  # "la app" no es una elección: decide el modelo
+        decir("Entendido."),
+    )
+    async with Client(build_server(indice_discord(), launch=lambda _e: None)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY)
+        await agente.run("abre discord")
+        await agente.run("la app")
+    # "la app" llega tal cual (no hay opción que resolver) pero con la pregunta anterior delante
+    ultimo = llm.seen[2]
+    assert usuario_de(ultimo) == ["abre discord", "la app"]
+    assert ultimo[-2].role == "assistant" and ultimo[-2].content.startswith("¿Cuál?")
+
+
+async def test_la_eleccion_pendiente_se_consume_una_sola_vez() -> None:
+    llm = FakeLLM(
+        llamar("apps_search", nombre="discord"),
+        decir("¿Cuál?"),
+        decir("hecho"),
+        decir("vale"),
+    )
+    async with Client(build_server(indice_discord(), launch=lambda _e: None)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY)
+        await agente.run("abre discord")
+        await agente.run("el primero")
+        await agente.run("el primero")  # ya no hay lista pendiente: es texto normal
+    assert usuario_de(llm.seen[3])[-1] == "el primero"
+
+
+async def test_el_historial_guarda_mensajes_llamadas_y_resultados() -> None:
+    backend = FakeBackend({"apps.search": '{"ok": true}'})
+    llm = FakeLLM(llamar("apps_search", nombre="x"), decir("nada"))
+    agente = Agent(llm, backend, policy=POLICY)
+    await agente.run("busca x")
+    assert [m.role for m in agente.history] == ["user", "assistant", "tool", "assistant"]
+    assert agente.history[1].tool_calls[0].name == "apps_search"
+
+
+async def test_limite_de_turnos_descarta_turnos_enteros_y_el_historial_empieza_en_usuario() -> None:
+    llm = FakeLLM(*[decir(f"r{i}") for i in range(5)])
+    agente = Agent(llm, FakeBackend(), policy=POLICY, max_turns=3)
+    for i in range(5):
+        await agente.run(f"p{i}")
+    assert usuario_de(list(agente.history)) == ["p2", "p3", "p4"]
+    assert agente.history[0].role == "user"
+    # el modelo nunca recibe más de max_turns peticiones de usuario
+    assert all(len(usuario_de(vista)) <= 3 for vista in llm.seen)
+
+
+async def test_limite_de_tamano_descarta_los_turnos_antiguos() -> None:
+    llm = FakeLLM(*[decir("x" * 400) for _ in range(6)])
+    agente = Agent(llm, FakeBackend(), policy=POLICY, max_turns=50, max_chars=1000)
+    for i in range(6):
+        await agente.run(f"pregunta {i}")
+    assert sum(len(m.content) for m in agente.history) <= 1000 + 400
+    assert usuario_de(list(agente.history))[-1] == "pregunta 5"
+    assert "pregunta 0" not in usuario_de(list(agente.history))
+
+
+async def test_un_error_del_modelo_no_deja_el_historial_a_medias() -> None:
+    class Falla:
+        def __init__(self) -> None:
+            self.n = 0
+
+        async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+            self.n += 1
+            if self.n == 1:
+                return llamar("apps_search", nombre="x")
+            raise LLMError("Ollama apagado")
+
+    agente = Agent(Falla(), FakeBackend(), policy=POLICY)
+    with pytest.raises(LLMError):
+        await agente.run("busca x")
+    assert agente.history == ()
+
+
+async def test_reset_olvida_historial_y_opciones() -> None:
+    llm = FakeLLM(llamar("apps_search", nombre="discord"), decir("¿Cuál?"), decir("ok"))
+    async with Client(build_server(indice_discord(), launch=lambda _e: None)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY)
+        await agente.run("abre discord")
+        agente.reset()
+        await agente.run("el primero")
+    assert usuario_de(llm.seen[2]) == ["el primero"]
+
+
+async def test_repl_nuevo_reinicia_la_conversacion() -> None:
+    llm = FakeLLM(decir("hola"), decir("hola otra vez"))
+    agente = Agent(llm, FakeBackend(), policy=POLICY)
+    entradas = iter(["uno", "/nuevo", "dos", "salir"])
+    salidas: list[str] = []
+
+    async def read() -> str:
+        return next(entradas)
+
+    await repl(agente, read, salidas.append)
+    assert "Conversación reiniciada." in salidas
+    assert usuario_de(llm.seen[1]) == ["dos"]
+
+
+def test_el_prompt_manda_lanzar_sin_preguntar_si_hay_ganador_claro() -> None:
+    from core.agent import SYSTEM_PROMPT
+
+    assert "ganador_claro=true" in SYSTEM_PROMPT and "sin preguntar" in SYSTEM_PROMPT
+    assert "ganador_claro=false" in SYSTEM_PROMPT and "máximo 3" in SYSTEM_PROMPT
+    assert "apps_launch ha devuelto ok=true" in SYSTEM_PROMPT  # no afirmar que se abrió algo sin haberlo lanzado
+
+
+async def test_llamadas_identicas_en_una_respuesta_se_ejecutan_una_vez() -> None:
+    bucle = LLMResponse("", tuple(ToolCall("apps_launch", {"id": "startapps:967ad27c"}) for _ in range(9)))
+    backend = FakeBackend()
+    llm = FakeLLM(bucle, decir("abierto"))
+    resultado = await Agent(llm, backend, policy=POLICY).run("abre el editor")
+    assert backend.calls == [("apps.launch", {"id": "startapps:967ad27c"})]
+    assert len(resultado.steps) == 1
+    # el historial refleja lo que realmente se ejecutó, no las nueve copias
+    assert len(llm.seen[1][-2].tool_calls) == 1
+
+
+async def test_tope_de_llamadas_distintas_por_respuesta() -> None:
+    muchas = LLMResponse("", tuple(ToolCall("apps_search", {"nombre": f"x{i}"}) for i in range(10)))
+    backend = FakeBackend()
+    await Agent(FakeLLM(muchas, decir("ok")), backend, policy=POLICY).run("busca")
+    assert len(backend.calls) == 4
+
+
+async def test_si_ante_varias_opciones_vuelve_a_preguntar_sin_llamar_al_modelo() -> None:
+    llm = FakeLLM(llamar("apps_search", nombre="discord"), decir("¿Cuál?"), decir("hecho"))
+    async with Client(build_server(indice_discord(), launch=lambda _e: None)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY)
+        await agente.run("abre discord")
+        r = await agente.run("sí")
+        assert r.answer.startswith("Eso no me dice cuál") and "1. " in r.answer and "3. " in r.answer
+        assert len(llm.seen) == 2  # el modelo no vio el "sí"
+        # la lista sigue pendiente: ahora sí se puede elegir
+        await agente.run("el primero")
+    assert "opción 1" in usuario_de(llm.seen[2])[-1]
