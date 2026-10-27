@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,9 @@ from hands.actionlog import ActionLog
 from hands.apps import discovery, launcher
 from hands.apps.index import AppIndex
 from hands.apps.models import AppEntry
+from hands.web.fetch import HttpFetcher
+from hands.web.service import WebService
+from hands.web.store import TemplateStore
 
 log = logging.getLogger("hands")
 
@@ -58,13 +61,14 @@ def build_server(
     index: AppIndex,
     launch: Callable[[AppEntry], None] = launcher.launch,
     actions: ActionLog | None = None,
+    web: WebService | None = None,
 ) -> MCPServer:
     server = MCPServer("hands-mcp")
 
-    def audited(tool: str, args: dict[str, Any], run: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    async def audited(tool: str, args: dict[str, Any], run: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            result = run()
+            result = await run()
         except Exception as exc:
             if actions:
                 actions.record(tool, args, False, f"{type(exc).__name__}: {exc}", started)
@@ -80,8 +84,8 @@ def build_server(
             "Devuelve candidatos con su id; pásalo a apps.launch para abrirlo."
         ),
     )
-    def apps_search(nombre: str, limite: int = 5) -> dict[str, Any]:
-        def run() -> dict[str, Any]:
+    async def apps_search(nombre: str, limite: int = 5) -> dict[str, Any]:
+        async def run() -> dict[str, Any]:
             found = index.search(nombre, limit=max(1, min(limite, 10)))
             return {
                 "ok": True,
@@ -89,21 +93,43 @@ def build_server(
                 "resultados": [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found],
             }
 
-        return audited("apps.search", {"nombre": nombre, "limite": limite}, run)
+        return await audited("apps.search", {"nombre": nombre, "limite": limite}, run)
 
     @server.tool(
         name="apps.launch",
         description="Abre una aplicación o juego usando un id devuelto por apps.search. No acepta otras órdenes.",
     )
-    def apps_launch(id: str) -> dict[str, Any]:
-        def run() -> dict[str, Any]:
+    async def apps_launch(id: str) -> dict[str, Any]:
+        async def run() -> dict[str, Any]:
             entry = index.get(id)
             if entry is None:
                 return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
             launch(entry)
             return {"ok": True, "mensaje": f"Lanzado {entry.name}"}
 
-        return audited("apps.launch", {"id": id}, run)
+        return await audited("apps.launch", {"id": id}, run)
+
+    if web is not None:
+
+        @server.tool(
+            name="web.open",
+            description="Abre una URL http/https en el navegador. Úsala solo si ya tienes la URL exacta.",
+        )
+        async def web_open(url: str) -> dict[str, Any]:
+            return await audited("web.open", {"url": url}, lambda: web.open(url))
+
+        @server.tool(
+            name="web.site_search",
+            description=(
+                "Busca algo DENTRO de una web (YouTube, Wikipedia, GitHub, cualquier otra) y muestra los resultados "
+                "en el navegador. 'sitio' es el nombre o dominio de la web; 'consulta', lo que se busca. "
+                "Descubre por sí sola cómo busca esa web y lo recuerda."
+            ),
+        )
+        async def web_site_search(sitio: str, consulta: str) -> dict[str, Any]:
+            return await audited(
+                "web.site_search", {"sitio": sitio, "consulta": consulta}, lambda: web.site_search(sitio, consulta)
+            )
 
     return server
 
@@ -121,16 +147,19 @@ async def _refresh_forever(index: AppIndex, every: float = REFRESH_SECONDS) -> N
             log.warning("no se pudo refrescar el índice de apps", exc_info=True)
 
 
-async def serve(index: AppIndex, token: str, port: int, actions: ActionLog) -> None:
+async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_path: Path) -> None:
     index.replace(await asyncio.to_thread(discovery.discover))
     log.info("índice de apps: %d entradas", len(index))
-    server = build_server(index, actions=actions)
+    fetcher = HttpFetcher()
+    web = WebService(TemplateStore(db_path), fetcher)
+    server = build_server(index, actions=actions, web=web)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index))
     try:
         await uvicorn.Server(config).serve()
     finally:
         refresh.cancel()
+        await fetcher.aclose()
 
 
 def main() -> None:
@@ -144,7 +173,8 @@ def main() -> None:
     if not token:
         sys.exit("Falta HANDS_MCP_TOKEN en .env (ver .env.example).")
     port = int(os.environ.get("HANDS_MCP_PORT", "8765"))
-    asyncio.run(serve(AppIndex(), token, port, ActionLog(Path("logs"))))
+    db_path = Path(os.environ.get("DIOGENES_DB_PATH", "data/diogenes.db"))
+    asyncio.run(serve(AppIndex(), token, port, ActionLog(Path("logs")), db_path))
 
 
 if __name__ == "__main__":
