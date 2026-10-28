@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -162,3 +163,26 @@ def test_el_prompt_lleva_las_reglas(frase: str) -> None:
 def test_dos_citas_con_comillas_rectas_no_se_emparejan_entre_si() -> None:
     respuesta = 'No hay opción de "más visto" en la página. Abrí "Palit GeForce RTX 5060 Ti Dual 8GB GDDR7" sin más.'
     assert _grounded(respuesta, [paso_pagina(PAGINA)]) == respuesta
+
+
+# --- «he abierto…» tras un clic fallido -------------------------------------------------------------------------
+
+
+def clic(ok: bool, **extra: Any) -> Step:
+    mensaje = "No se pudo hacer clic en e4: otro elemento lo tapa." if not ok else "Clic en e4"
+    return Step("browser.click", {"ref": "e4"}, json.dumps({"ok": ok, "mensaje": mensaje, **extra}), ok)
+
+
+def test_he_abierto_tras_un_clic_fallido_se_corrige() -> None:
+    texto = _grounded("He abierto el vídeo «Mi vídeo».", [clic(False)])
+    assert texto.startswith("No lo he conseguido") and "tapa" in texto
+
+
+def test_he_abierto_tras_un_clic_que_cambio_la_url_se_respeta() -> None:
+    respuesta = "He abierto el vídeo."
+    assert _grounded(respuesta, [clic(True, url_cambio=True, cambio_visible=True)]) == respuesta
+
+
+def test_he_abierto_con_un_clic_que_no_cambio_nada_se_corrige() -> None:
+    texto = _grounded("He abierto el vídeo.", [clic(True, url_cambio=False, cambio_visible=False)])
+    assert "no ha cambiado" in texto

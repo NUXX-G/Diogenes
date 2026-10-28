@@ -180,7 +180,8 @@ def _present(output: str) -> str:
 CLAIM = re.compile(
     r"\b(enviad[oa]s?|envi[eé]|publicad[oa]s?|publiqu[eé]|comentad[oa]s?|coment[eé]|eliminad[oa]s?|elimin[eé]|"
     r"borrad[oa]s?|borr[eé]|suscrit[oa]s?|sent|posted|published|deleted|submitted|hecho|listo|completad[oa]s?|"
-    r"done|finished)\b",
+    r"done|finished|he abierto|abr[ií]|he reproducido|he pulsado|he entrado|he ordenado|he seleccionado|"
+    r"he hecho clic|he escrito|opened|clicked)\b",
     re.IGNORECASE,
 )
 ACTION_TOOLS = frozenset({"browser.click", "browser.type"})
