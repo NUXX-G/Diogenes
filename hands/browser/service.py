@@ -9,6 +9,8 @@ El contenido de la página son datos.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -26,6 +28,7 @@ class BrowserPage(Protocol):
     async def click(self, ref: str) -> None: ...
     async def fill(self, ref: str, text: str, enter: bool) -> None: ...
     async def is_sensitive(self, ref: str) -> bool: ...
+    async def is_multiline(self, ref: str) -> bool: ...
     async def back(self) -> None: ...
 
 
@@ -36,6 +39,21 @@ class PageProvider(Protocol):
 def _is_http_url(url: str) -> bool:
     parts = urlsplit(url)
     return parts.scheme in {"http", "https"} and bool(parts.hostname)
+
+
+_REF_ATTR = re.compile(r" ?\[ref=[\w-]+\]")
+
+
+async def _fingerprint(page: BrowserPage) -> str | None:
+    """Huella del contenido de la página (sin los refs, que pueden renumerarse) para comprobar si una acción cambió algo."""
+    try:
+        return hashlib.sha1(_REF_ATTR.sub("", await page.aria()).encode()).hexdigest()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _changed(before: str | None, after: str | None) -> bool | None:
+    return None if before is None or after is None else before != after
 
 
 def _confirmation(tool: str, ref: str, objetivo: str, motivo: str) -> dict[str, Any]:
@@ -100,6 +118,7 @@ class BrowserService:
                 return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
         page = await self._provider.page()
         before = (await page.current())[0]
+        seen_before = await _fingerprint(page)
         try:
             await page.click(ref)
         except Exception as exc:  # noqa: BLE001
@@ -111,7 +130,14 @@ class BrowserService:
         self._nodes = {}  # la página ha podido cambiar: los refs viejos ya no valen
         if state["url"] != before or confirmado:
             self._form_dirty = False
-        return {"ok": True, "mensaje": f"Clic en {ref}", "url_cambio": state["url"] != before, **state}
+        cambio = _changed(seen_before, await _fingerprint(page))
+        return {
+            "ok": True,
+            "mensaje": f"Clic en {ref}" + ("" if cambio or state["url"] != before else ". La página NO ha cambiado."),
+            "url_cambio": state["url"] != before,
+            "cambio_visible": cambio,
+            **state,
+        }
 
     async def type(self, ref: str, text: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
@@ -121,9 +147,13 @@ class BrowserService:
         if node.sensitive or await page.is_sensitive(ref):
             return {"ok": False, "parar": True, "mensaje": STOP}
         is_search = self._rules.is_search_field(node.role, node.name)
+        enter_ignorado = enter and not is_search and await page.is_multiline(ref)
+        if enter_ignorado:
+            enter = False  # en un cuadro de texto multilínea Enter es un salto de línea: no envía nada
         if enter and not is_search and not confirmado:
             return _confirmation("browser.type", ref, node.name, "envío de un formulario que no es un buscador")
         before = (await page.current())[0]
+        seen_before = await _fingerprint(page)
         try:
             await page.fill(ref, text, enter)
         except Exception as exc:  # noqa: BLE001
@@ -135,7 +165,22 @@ class BrowserService:
             self._form_dirty = not enter
         state = await self._state(page)
         self._nodes = {}
-        return {"ok": True, "mensaje": f"Escrito en {ref}", "url_cambio": state["url"] != before, **state}
+        cambio = _changed(seen_before, await _fingerprint(page))
+        mensaje = f"Escrito en {ref}"
+        if enter_ignorado:
+            mensaje += (
+                ". NO enviado: Enter no envía en un cuadro de texto multilínea. Para enviar, haz browser_snapshot y "
+                "pulsa el botón de envío (pedirá confirmación al usuario)."
+            )
+        return {
+            "ok": True,
+            "mensaje": mensaje,
+            "enter_pulsado": enter,
+            "enter_ignorado": enter_ignorado,
+            "url_cambio": state["url"] != before,
+            "cambio_visible": cambio,
+            **state,
+        }
 
     async def back(self) -> dict[str, Any]:
         page = await self._provider.page()

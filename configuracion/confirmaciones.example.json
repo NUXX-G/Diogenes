@@ -19,12 +19,13 @@
       "darse de baja", "cancelar suscripcion", "unsubscribe", "cancel subscription",
       "confirmar", "confirma", "confirm",
       "aceptar terminos", "aceptar las condiciones", "aceptar condiciones", "accept terms", "i agree", "agree to terms",
-      "submit", "enviar formulario"
+      "submit", "enviar formulario",
+      "suscribirse", "suscribete", "subscribe"
     ],
     "terminos_de_pago": [
       "pagar", "pagar ahora", "comprar", "comprar ahora", "tramitar pedido", "realizar pedido", "finalizar compra",
-      "suscribirse", "anadir metodo de pago", "anadir tarjeta",
-      "pay", "pay now", "buy", "buy now", "place order", "checkout", "complete purchase", "subscribe",
+      "anadir metodo de pago", "anadir tarjeta",
+      "pay", "pay now", "buy", "buy now", "place order", "checkout", "complete purchase",
       "add payment method", "add card"
     ],
     "campos_de_busqueda": ["buscar", "busqueda", "buscador", "search", "find"]

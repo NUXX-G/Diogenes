@@ -101,6 +101,14 @@ class PlaywrightPage:
         except Exception:  # noqa: BLE001
             return True  # ante la duda, no se escribe
 
+    async def is_multiline(self, ref: str) -> bool:
+        page = await self._live()
+        script = "e => e.tagName === 'TEXTAREA' || e.isContentEditable"
+        try:
+            return bool(await page.locator(f"aria-ref={ref}").evaluate(script, timeout=3_000))
+        except Exception:  # noqa: BLE001
+            return False
+
     async def back(self) -> None:
         page = await self._live()
         await page.go_back(wait_until="domcontentloaded", timeout=10_000)
