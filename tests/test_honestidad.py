@@ -288,3 +288,19 @@ def test_sin_paginas_vistas_no_se_juzgan_precios() -> None:
 def orden_barato() -> Step:
     datos = {"ok": True, "url": LISTA + "&sort=price_asc", "titulo": "T", "url_cambio": True, "cambio_visible": True}
     return Step("browser.click", {"ref": "e9"}, json.dumps({**datos, "criterio": ["barato"]}), True)
+
+
+# --- «he abierto el resultado» cuando lo último fue ordenar -----------------------------------------------------
+
+
+def test_he_abierto_el_resultado_tras_ordenar_se_corrige_y_se_conserva_lo_demas() -> None:
+    respuesta = "La más barata es la Palit a 575,95 €. He abierto el resultado correspondiente."
+    texto = _grounded(respuesta, [pagina_con_precios(), orden_barato()])
+    assert texto.startswith("Corrección: no he abierto ningún resultado")
+    assert texto.endswith(respuesta)
+
+
+def test_abrir_un_resultado_despues_de_ordenar_si_se_respeta() -> None:
+    respuesta = "La más barata es la Palit a 575,95 €. He abierto el producto."
+    pasos = [pagina_con_precios(), orden_barato(), navegar("https://tienda.com/producto/palit")]
+    assert _grounded(respuesta, pasos) == respuesta

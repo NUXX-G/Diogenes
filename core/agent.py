@@ -328,6 +328,26 @@ def _unseen_prices(answer: str, steps: list[Step]) -> list[str]:
 OPENED = re.compile(r"\bhe abierto\b|\babr[ií]\b|\bopened\b", re.IGNORECASE)
 
 
+OPENED_ITEM = re.compile(
+    r"\b(?:he abierto|abr[ií])\s+(?:el|la|un|una)\s+(?:primer[oa]?\s+)?"
+    r"(?:resultado|v[ií]deo|producto|tarjeta|art[ií]culo|enlace|elemento|ficha)\b",
+    re.IGNORECASE,
+)
+
+
+def _opened_nothing(answer: str, steps: list[Step]) -> str | None:
+    """Dice haber abierto un resultado, pero lo último que se hizo fue ordenar o filtrar: no se abrió ninguno."""
+    if not OPENED_ITEM.search(answer):
+        return None
+    last = next((d for s in reversed(steps) if s.tool in ACTION_TOOLS and (d := _json_dict(s.result))), None)
+    if not last or not last.get("criterio"):
+        return None
+    return (
+        "Corrección: no he abierto ningún resultado; lo último que hice fue ordenar o filtrar la lista y sigo en "
+        f"«{last.get('titulo', '')}» ({last.get('url', '')})."
+    )
+
+
 def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
     """Dice haber abierto un elemento que cita (y que sí salió en una página), pero la página en la que acabó no es la suya.
     Devuelve la corrección, que se antepone a la respuesta."""
@@ -355,7 +375,7 @@ def _grounded(answer: str, steps: list[Step]) -> str:
         failure = _honest_failure(actions[-1])
         if failure is not None:
             return failure
-    correction = _opened_elsewhere(answer, steps)
+    correction = _opened_elsewhere(answer, steps) or _opened_nothing(answer, steps)
     prefix = f"{correction}\n" if correction else ""
     if unseen := _unseen_prices(answer, steps):
         cifras = ", ".join(f"{p} €" for p in dict.fromkeys(unseen))
