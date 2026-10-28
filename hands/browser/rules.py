@@ -12,9 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hands.apps.models import normalize
+from hands.browser.snapshot import CLICKABLE_ROLES
 
 CONFIG_DIR = Path("configuracion")
-ACTIONABLE = frozenset({"button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option"})
+ACTIONABLE = (
+    frozenset({"button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option"}) | CLICKABLE_ROLES
+)
 
 
 def _matches(name: str, terms: frozenset[str]) -> str | None:

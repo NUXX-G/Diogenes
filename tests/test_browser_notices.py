@@ -183,3 +183,39 @@ async def test_al_cambiar_de_url_no_se_marca_nada_como_nuevo() -> None:
     svc = BrowserService(Provider(page), RULES)
     await svc.snapshot()
     assert snapshot.FRESH_HEADER not in (await svc.click("e1"))["pagina"]
+
+
+# --- elementos que la web hace clicables sin ser controles ARIA (opciones de un desplegable) ----------------
+
+DESPLEGABLE = """\
+- main:
+  - button "Ordenar" [active] [ref=e1] [cursor=pointer]
+  - list:
+    - listitem [ref=e2] [cursor=pointer]: Relevancia
+    - listitem [ref=e3] [cursor=pointer]: Precio más bajo
+    - listitem [ref=e4]: Texto que no se puede pulsar
+    - listitem [ref=e5] [cursor=pointer]: Comprar ahora
+"""
+
+
+def test_las_opciones_clicables_de_un_desplegable_se_listan() -> None:
+    out = snapshot.compact(DESPLEGABLE)
+    assert '[e3] listitem "Precio más bajo"' in out
+    assert "[e4]" not in out  # sin cursor de puntero no es clicable
+
+
+async def test_una_opcion_clicable_se_puede_pulsar() -> None:
+    page = FakePage(DESPLEGABLE, navigates=False)
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    assert (await svc.click("e3"))["ok"] is True
+    assert ("click", "e3") in page.calls
+
+
+async def test_las_reglas_de_pago_tambien_valen_para_elementos_clicables_que_no_son_botones() -> None:
+    page = FakePage(DESPLEGABLE, navigates=False)
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    res = await svc.click("e5")
+    assert res["ok"] is False and res["parar"] is True
+    assert ("click", "e5") not in page.calls
