@@ -35,9 +35,20 @@ CANAL = """\
 
 
 class FakePage:
-    def __init__(self, aria: str = CANAL, sensitive: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        aria: str = CANAL,
+        sensitive: set[str] | None = None,
+        *,
+        multiline: set[str] | None = None,
+        navigates: bool = True,
+        on_click: dict[str, str] | None = None,
+    ) -> None:
         self._aria = aria
         self._sensitive = sensitive or set()
+        self._multiline = multiline or set()
+        self._navigates = navigates  # False: los clics no cambian la URL (solo, quizá, el contenido)
+        self._on_click = on_click or {}  # ref → aria nuevo tras el clic
         self.url = "about:blank"
         self.title = ""
         self.calls: list[tuple[Any, ...]] = []
@@ -54,13 +65,18 @@ class FakePage:
 
     async def click(self, ref: str) -> None:
         self.calls.append(("click", ref))
-        self.url = "https://www.youtube.com/watch?v=aaa"
+        if self._navigates:
+            self.url = "https://www.youtube.com/watch?v=aaa"
+        self._aria = self._on_click.get(ref, self._aria)
 
     async def fill(self, ref: str, text: str, enter: bool) -> None:
         self.calls.append(("fill", ref, text, enter))
 
     async def is_sensitive(self, ref: str) -> bool:
         return ref in self._sensitive
+
+    async def is_multiline(self, ref: str) -> bool:
+        return ref in self._multiline
 
     async def back(self) -> None:
         self.calls.append(("back",))

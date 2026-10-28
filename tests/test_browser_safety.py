@@ -49,7 +49,7 @@ def clics(page: FakePage) -> list[Any]:
 @pytest.mark.parametrize(
     "nombre",
     ["Enviar", "Send message", "Publicar", "Post", "Responder", "Reply", "Comentar", "Comment", "Eliminar", "Delete",
-     "Borrar", "Remove", "Darse de baja", "Unsubscribe", "Cancelar suscripción", "Confirmar", "Confirm", "Submit",
+     "Borrar", "Remove", "Subscribe", "Suscribirse", "Darse de baja", "Unsubscribe", "Cancelar suscripción", "Confirmar", "Confirm", "Submit",
      "Aceptar términos", "Accept terms"],
 )  # fmt: skip
 def test_verbos_irreversibles_en_espanol_e_ingles(nombre: str) -> None:
@@ -64,12 +64,18 @@ def test_navegar_ordenar_y_abrir_no_pide_confirmacion(nombre: str) -> None:
 
 @pytest.mark.parametrize(
     "nombre",
-    ["Buy now", "Place order", "Checkout", "Pay", "Subscribe", "Add payment method", "Comprar", "Tramitar pedido",
-     "Suscribirse", "Pagar ahora", "Finalizar compra"],
+    ["Buy now", "Place order", "Checkout", "Pay", "Add payment method", "Comprar", "Tramitar pedido",
+     "Pagar ahora", "Finalizar compra"],
 )  # fmt: skip
 def test_pagos_en_ingles_y_terminos_genericos(nombre: str) -> None:
     assert RULES.payment_term("button", nombre) is not None
     assert RULES.payment_term("link", nombre) is not None
+
+
+def test_suscribirse_no_es_un_pago_sino_una_accion_a_confirmar() -> None:
+    for nombre in ("Subscribe", "Suscribirse"):
+        assert RULES.payment_term("button", nombre) is None
+        assert RULES.irreversible_term("button", nombre) is not None
 
 
 def test_pagar_no_casa_con_palabras_parecidas() -> None:
@@ -196,6 +202,15 @@ async def ejecutar(
     return resultado, page, vistas
 
 
+async def ejecutar_con(
+    llm: FakeLLM, page: FakePage, confirm: Any = None
+) -> tuple[Any, FakePage, list[tuple[str, dict[str, Any]]]]:
+    svc = BrowserService(Provider(page), RULES)
+    async with Client(build_server(AppIndex(), browser=svc)) as client:
+        resultado = await Agent(llm, McpTools(client), policy=POLICY, confirm=confirm).run("manda el mensaje")
+    return resultado, page, []
+
+
 async def test_inyeccion_la_pagina_dice_pulsa_enviar_y_el_clic_queda_sin_ejecutar() -> None:
     llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("No he podido."))
     resultado, page, _ = await ejecutar(llm, INYECCION, confirm=None)  # nadie a quien preguntar → no
@@ -270,3 +285,104 @@ async def test_solo_el_ultimo_snapshot_se_conserva_en_el_historial() -> None:
     assert snaps[0] == SNAPSHOT_STUB
     assert snaps[1].startswith("[CONTENIDO DE LA PÁGINA")
     assert "{" not in snaps[1][:5]  # llega como texto plano, no como JSON con escapes
+
+
+# --- Enter en un textarea no envía; hay que pulsar el botón (con su propia confirmación) --------------------
+
+MENSAJE = """\
+- main:
+  - textbox "Mensaje" [ref=e1]
+  - button "Enviar" [ref=e2]
+  - paragraph: Nada enviado todavía
+"""
+MENSAJE_ENVIADO = MENSAJE.replace("Nada enviado todavía", "ENVIADO: hola")
+
+
+async def test_enter_en_textarea_se_ignora_y_no_pide_confirmacion_hasta_el_boton() -> None:
+    page = FakePage(MENSAJE, multiline={"e1"}, navigates=False, on_click={"e2": MENSAJE_ENVIADO})
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    res = await svc.type("e1", "hola", True)
+    assert res["ok"] is True and res["enter_ignorado"] is True and res["enter_pulsado"] is False
+    assert "NO enviado" in res["mensaje"]
+    assert [c for c in page.calls if c[0] == "fill"] == [("fill", "e1", "hola", False)]  # sin Enter
+    await svc.snapshot()
+    pendiente = await svc.click("e2")  # el envío real pasa por su propia confirmación
+    assert pendiente["requiere_confirmacion"] is True
+    hecho = await svc.click("e2", confirmado=True)
+    assert hecho["cambio_visible"] is True and hecho["url_cambio"] is False
+
+
+async def test_textarea_que_es_un_buscador_si_usa_enter() -> None:
+    page = FakePage('- textbox "Buscar" [ref=e1]', multiline={"e1"})
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    res = await svc.type("e1", "mochis", True)
+    assert res["enter_pulsado"] is True and res["enter_ignorado"] is False
+    assert [c for c in page.calls if c[0] == "fill"] == [("fill", "e1", "mochis", True)]
+
+
+# --- verificar antes de afirmar --------------------------------------------------------------------------
+
+
+async def test_clic_sin_cambio_lo_dice() -> None:
+    page = FakePage(MENSAJE, navigates=False)  # el clic no cambia ni la URL ni el contenido
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    res = await svc.click("e2", confirmado=True)
+    assert res["url_cambio"] is False and res["cambio_visible"] is False
+    assert "NO ha cambiado" in res["mensaje"]
+
+
+def aprobar(respuesta: bool = True) -> Any:
+    async def confirm(tool: str, args: dict[str, Any]) -> bool:
+        return respuesta
+
+    return confirm
+
+
+async def test_el_resumen_no_dice_enviado_si_solo_se_escribio() -> None:
+    page = FakePage(MENSAJE, multiline={"e1"}, navigates=False)
+    llm = FakeLLM(
+        llamar("browser_snapshot"),
+        llamar("browser_type", ref="e1", texto="hola", enter=True),
+        decir("Listo, lo envié."),
+    )
+    resultado, _, _ = await ejecutar_con(llm, page, aprobar())
+    assert "no se ha enviado" in resultado.answer
+    assert "lo envié" not in resultado.answer
+
+
+async def test_el_resumen_no_dice_enviado_si_el_clic_no_cambio_nada() -> None:
+    page = FakePage(MENSAJE, navigates=False)
+    llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("Enviado."))
+    resultado, _, _ = await ejecutar_con(llm, page, aprobar())
+    assert "no ha cambiado" in resultado.answer and "no puedo confirmar" in resultado.answer
+
+
+async def test_el_resumen_no_dice_hecho_si_el_usuario_nego() -> None:
+    page = FakePage(MENSAJE, navigates=False, on_click={"e2": MENSAJE_ENVIADO})
+    llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("Hecho, enviado."))
+    resultado, _, _ = await ejecutar_con(llm, page, aprobar(False))
+    assert resultado.answer == "No lo he hecho: no lo has confirmado."
+
+
+async def test_el_resumen_se_respeta_si_la_pagina_cambio() -> None:
+    page = FakePage(MENSAJE, navigates=False, on_click={"e2": MENSAJE_ENVIADO})
+    llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("Enviado."))
+    resultado, _, _ = await ejecutar_con(llm, page, aprobar())
+    assert resultado.answer == "Enviado."
+
+
+async def test_una_respuesta_sin_afirmaciones_no_se_toca() -> None:
+    page = FakePage(MENSAJE, navigates=False)
+    llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("La página sigue igual."))
+    resultado, _, _ = await ejecutar_con(llm, page, aprobar())
+    assert resultado.answer == "La página sigue igual."
+
+
+def test_el_prompt_exige_verificar_antes_de_afirmar() -> None:
+    from core.agent import SYSTEM_PROMPT
+
+    assert "Escribir en un campo NO es enviar" in SYSTEM_PROMPT
+    assert "enter no envía" in SYSTEM_PROMPT
