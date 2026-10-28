@@ -317,7 +317,8 @@ OPENED = re.compile(r"\bhe abierto\b|\babr[ií]\b|\bopened\b", re.IGNORECASE)
 
 
 def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
-    """Dice haber abierto un elemento que cita (y que sí salió en una página), pero la página en la que acabó no es la suya."""
+    """Dice haber abierto un elemento que cita (y que sí salió en una página), pero la página en la que acabó no es la suya.
+    Devuelve la corrección, que se antepone a la respuesta."""
     if not OPENED.search(answer):
         return None
     corpus = _corpus(steps)
@@ -329,8 +330,8 @@ def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
     if any(_flat(c).rstrip(" .…") in title for c in named):
         return None
     return (
-        f"No he abierto «{named[0]}»: la página en la que estoy es «{here['titulo']}» ({here.get('url', '')}). "
-        "Solo vi ese nombre en una lista."
+        f"Corrección: no he abierto «{named[0]}»; sigo en «{here['titulo']}» ({here.get('url', '')}), "
+        "donde vi ese nombre en una lista."
     )
 
 
@@ -342,21 +343,22 @@ def _grounded(answer: str, steps: list[Step]) -> str:
         failure = _honest_failure(actions[-1])
         if failure is not None:
             return failure
-    elsewhere = _opened_elsewhere(answer, steps)
-    if elsewhere:
-        return elsewhere
+    correction = _opened_elsewhere(answer, steps)
+    prefix = f"{correction}\n" if correction else ""
     if any(s.tool.startswith("browser.") or s.tool in BROWSER_TURN_TOOLS for s in steps) and not NEGATION.search(
         answer
     ):
         backed = _backed_criteria(steps)
         unbacked = [k for k, (_, pattern) in CRITERIA_CLAIMS.items() if pattern.search(answer) and k not in backed]
         if unbacked:
-            return _unbacked_answer(unbacked, steps)
+            return prefix + _unbacked_answer(unbacked, steps)
     missing = _unverbatim_citations(answer, steps)
     if missing:
         names = "; ".join(f"«{m}»" for m in missing)
-        return f"{answer}\n(Aviso: {names} no coincide literalmente con ningún nombre de la página; compruébalo.)"
-    return answer
+        return (
+            f"{prefix}{answer}\n(Aviso: {names} no coincide literalmente con ningún nombre de la página; compruébalo.)"
+        )
+    return prefix + answer
 
 
 def _stop_message(output: str) -> str | None:

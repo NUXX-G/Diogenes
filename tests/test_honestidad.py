@@ -199,7 +199,8 @@ def lista(titulo: str, url: str = "https://yt.com/results") -> Step:
 def test_dice_haber_abierto_un_video_que_solo_vio_en_una_lista() -> None:
     respuesta = 'He abierto el primer vídeo: "Os enseño mi mayor desastre financiero y ponemos un alerón a un M4".'
     texto = _grounded(respuesta, [lista("canal Hrom - YouTube")])
-    assert texto.startswith("No he abierto «Os enseño") and "canal Hrom - YouTube" in texto
+    assert texto.startswith("Corrección: no he abierto «Os enseño") and "canal Hrom - YouTube" in texto
+    assert texto.endswith(respuesta)  # se conserva lo que dijo, con la corrección delante
 
 
 def test_abrir_un_elemento_cuyo_titulo_es_el_de_la_pagina_actual_se_respeta() -> None:
