@@ -16,6 +16,9 @@ from pathlib import Path
 
 import httpx
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+from hands.browser.service import ClickIntercepted
 
 DEFAULT_PORT = 9222
 DEFAULT_PROFILE = Path("data/browser-profile")
@@ -79,7 +82,12 @@ class PlaywrightPage:
 
     async def click(self, ref: str) -> None:
         page = await self._live()
-        await page.locator(f"aria-ref={ref}").click(timeout=5_000)
+        try:
+            await page.locator(f"aria-ref={ref}").click(timeout=5_000)
+        except PlaywrightTimeoutError as exc:
+            if "intercepts pointer events" in str(exc):
+                raise ClickIntercepted(ref) from exc
+            raise
         await self._settle()
 
     async def fill(self, ref: str, text: str, enter: bool) -> None:

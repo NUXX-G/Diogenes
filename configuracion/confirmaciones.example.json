@@ -28,6 +28,10 @@
       "pay", "pay now", "buy", "buy now", "place order", "checkout", "complete purchase",
       "add payment method", "add card"
     ],
-    "campos_de_busqueda": ["buscar", "busqueda", "buscador", "search", "find"]
+    "campos_de_busqueda": ["buscar", "busqueda", "buscador", "search", "find"],
+    "avisos_minimos": [
+      "rechazar todas", "rechazar todo", "rechazar", "solo necesarias", "solo las necesarias",
+      "reject all", "reject", "decline all", "decline", "only necessary", "necessary only"
+    ]
   }
 }

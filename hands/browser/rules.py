@@ -27,13 +27,21 @@ class BrowserRules:
     irreversible: frozenset[str]
     payment: frozenset[str]
     search_fields: frozenset[str]
+    minimal_notice: frozenset[str] = frozenset()
 
     @classmethod
-    def from_lists(cls, irreversible: Iterable[str], payment: Iterable[str], search: Iterable[str]) -> BrowserRules:
+    def from_lists(
+        cls,
+        irreversible: Iterable[str],
+        payment: Iterable[str],
+        search: Iterable[str],
+        minimal_notice: Iterable[str] = (),
+    ) -> BrowserRules:
         return cls(
             frozenset(normalize(t) for t in irreversible),
             frozenset(normalize(t) for t in payment),
             frozenset(normalize(t) for t in search),
+            frozenset(normalize(t) for t in minimal_notice),
         )
 
     @classmethod
@@ -48,7 +56,10 @@ class BrowserRules:
         if section is None:
             raise FileNotFoundError(f"No hay sección 'navegador' en confirmaciones*.json de {directory}")
         return cls.from_lists(
-            section["verbos_irreversibles"], section["terminos_de_pago"], section["campos_de_busqueda"]
+            section["verbos_irreversibles"],
+            section["terminos_de_pago"],
+            section["campos_de_busqueda"],
+            section.get("avisos_minimos", []),
         )
 
     def payment_term(self, role: str, name: str) -> str | None:
@@ -56,6 +67,10 @@ class BrowserRules:
 
     def irreversible_term(self, role: str, name: str) -> str | None:
         return _matches(name, self.irreversible) if role in ACTIONABLE else None
+
+    def minimal_notice_term(self, role: str, name: str) -> str | None:
+        """Botón de un aviso (cookies, etc.) que lo cierra con lo mínimo: rechazar."""
+        return _matches(name, self.minimal_notice) if role in {"button", "link"} else None
 
     def is_search_field(self, role: str, name: str) -> bool:
         return role == "searchbox" or _matches(name, self.search_fields) is not None

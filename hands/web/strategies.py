@@ -64,6 +64,7 @@ class BrowserSearchStrategy:
     """
 
     name = "navegador"
+    verified_by_browser = True
 
     def __init__(self, browser: BrowserService | None = None, wait_seconds: float = 4.0) -> None:
         self._browser = browser

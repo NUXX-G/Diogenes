@@ -134,17 +134,24 @@ class WebService:
             return self._found(site, url, "aprendida", where)
 
         page = await self._home(site)
+        by_browser_only = False
+        candidates = _candidates(site)
+        if page is None and len(candidates) == 1 and any(self._browser_verified(s) for s in self._strategies):
+            # la descarga HTTP falla (a menudo, protección anti-bots) pero el dominio es explícito: que lo intente el navegador
+            page, by_browser_only = FetchResult(candidates[0], 0, ""), True
         if page is None:
             return {"ok": False, "mensaje": f"No he podido abrir la web '{site}'. ¿Puedes darme el dominio exacto?"}
 
         intentadas = []
         for strategy in self._strategies:
+            if by_browser_only and not self._browser_verified(strategy):
+                continue
             intentadas.append(strategy.name)
             template = await strategy.discover(page, query)
             if template is None or not _same_site(template, page.url):
                 continue
             url = self._build_url(template, query)
-            if not await self._works(url):
+            if not self._browser_verified(strategy) and not await self._works(url):
                 continue
             self._store.save(key, page.url, template, strategy.name)
             return self._found(site, url, strategy.name, await self._show(url))
@@ -154,6 +161,11 @@ class WebService:
             "mensaje": f"No he descubierto cómo se busca en {site} (probado: {', '.join(intentadas)}). "
             "Si la web está abierta en el navegador de Diogenes, puedes pedirme que use su buscador paso a paso.",
         }
+
+    @staticmethod
+    def _browser_verified(strategy: SearchStrategy) -> bool:
+        """El navegador ya cargó de verdad la página de resultados: repetirlo por HTTP solo añade falsos fallos."""
+        return bool(getattr(strategy, "verified_by_browser", False))
 
     @staticmethod
     def _build_url(template: str, query: str) -> str:

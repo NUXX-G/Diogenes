@@ -10,6 +10,7 @@ El contenido de la página son datos.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import re
 import time
@@ -21,6 +22,10 @@ from hands.browser.rules import BrowserRules
 
 STOP = "Me paro aquí y te lo paso a ti: no relleno contraseñas ni datos de pago, ni completo compras."
 UNKNOWN_REF = "ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista."
+
+
+class ClickIntercepted(Exception):
+    """Otro elemento (un aviso de cookies, un diálogo) tapa el que se quería pulsar."""
 
 
 class BrowserPage(Protocol):
@@ -137,8 +142,21 @@ class BrowserService:
         page = await self._provider.page()
         before = (await page.current())[0]
         seen_before = self._digest
+        closed = ""
         try:
-            await page.click(ref)
+            try:
+                await page.click(ref)
+            except ClickIntercepted:
+                closed = await self._close_notice(page)
+                if not closed:
+                    raise
+                await page.click(ref)  # mismos refs: no se ha vuelto a leer la página
+        except ClickIntercepted:
+            return {
+                "ok": False,
+                "mensaje": f"No se pudo hacer clic en {ref}: otro elemento lo tapa (¿un aviso o un diálogo?). "
+                "Mira el snapshot por un botón para cerrarlo.",
+            }
         except Exception as exc:  # noqa: BLE001
             return {
                 "ok": False,
@@ -150,7 +168,9 @@ class BrowserService:
             self._form_dirty = False
         return {
             "ok": True,
-            "mensaje": f"Clic en {ref}" + ("" if seen["cambio_visible"] or moved else ". La página NO ha cambiado."),
+            "mensaje": f"Clic en {ref}"
+            + (f". Antes cerré un aviso que lo tapaba con «{closed}»" if closed else "")
+            + ("" if seen["cambio_visible"] or moved else ". La página NO ha cambiado."),
             "url_cambio": moved,
             **seen,
         }
@@ -194,6 +214,17 @@ class BrowserService:
             "url_cambio": seen["url"] != before,
             **seen,
         }
+
+    async def _close_notice(self, page: BrowserPage) -> str:
+        """Cierra con la opción mínima (rechazar) un aviso que tapa la página. Devuelve el botón pulsado, o ''."""
+        for node in self._nodes.values():
+            if self._rules.minimal_notice_term(node.role, node.name) and not self._rules.payment_term(
+                node.role, node.name
+            ):
+                with contextlib.suppress(Exception):
+                    await page.click(node.ref)
+                    return node.name
+        return ""
 
     def _search_field(self) -> snapshot.Node | None:
         fields = [

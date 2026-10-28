@@ -47,6 +47,23 @@ class Node:
         return self.role in TEXT_INPUTS and bool(_SENSITIVE.search(self.name))
 
 
+_PRICE = re.compile(r"(?:[€$£]\s?\d[\d.,]*|\d[\d.,]*\s?(?:€|\$|£|EUR|USD))")
+
+
+def _readable_name(name: str) -> str:
+    """Quita el título repetido de las tarjetas ("T T 889,99€ ...") y, si el nombre se recorta, conserva los precios."""
+    text = " ".join(name.split())
+    for size in range(15, len(text) // 2 + 1):
+        if text[:size] == text[size + 1 : 2 * size + 1] and text[size] == " ":
+            text = text[size + 1 :]
+            break
+    prices = list(dict.fromkeys(_PRICE.findall(text)))[:2]
+    head = _short(text, MAX_NAME)
+    if prices and not all(p in head for p in prices):
+        head = _short(text, MAX_NAME - 12) + " · " + " ".join(prices)
+    return head
+
+
 def _short(text: str, limit: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -87,8 +104,12 @@ def _without_echoed_headings(nodes: list[Node]) -> list[Node]:
     """Un encabezado cuyo texto repite el del enlace que le sigue (tarjetas de listas) no aporta nada."""
     kept: list[Node] = []
     for i, node in enumerate(nodes):
-        nxt = nodes[i + 1] if i + 1 < len(nodes) else None
-        if node.role == "heading" and nxt is not None and node.name and nxt.name.startswith(node.name[:30]):
+        near = [nodes[j] for j in (i - 1, i + 1) if 0 <= j < len(nodes)]
+        if (
+            node.role == "heading"
+            and node.name
+            and any(n.role != "heading" and n.name.startswith(node.name[:30]) for n in near)
+        ):
             continue
         kept.append(node)
     return kept
@@ -106,7 +127,7 @@ def compact(yaml_text: str, *, url: str = "", title: str = "") -> str:
     for node in nodes:
         if shown >= MAX_NODES:
             break
-        label = f'{node.role} "{_short(node.name, MAX_NAME)}"' if node.name else node.role
+        label = f'{node.role} "{_readable_name(node.name)}"' if node.name else node.role
         line = f"[{node.ref}] {label}{_href(node.href)}" if node.ref else f"  # {label}"
         if node.sensitive:
             line += "  (CAMPO SENSIBLE: no lo rellenes)"
