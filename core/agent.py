@@ -271,19 +271,45 @@ def _flat(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+def _citations(answer: str) -> list[str]:
+    return [next(g for g in m.groups() if g).translate(_QUOTE_CHARS).strip() for m in _QUOTED.finditer(answer)]
+
+
+def _page_dicts(steps: list[Step]) -> list[dict[str, Any]]:
+    return [d for s in steps if s.tool.startswith("browser.") and (d := _json_dict(s.result))]
+
+
+def _corpus(steps: list[Step]) -> str:
+    return _flat(" ".join(f"{d.get('pagina', '')} {d.get('titulo', '')}" for d in _page_dicts(steps)))
+
+
 def _unverbatim_citations(answer: str, steps: list[Step]) -> list[str]:
     """Nombres citados entre comillas o paréntesis que no están tal cual en ninguna página vista en este turno."""
-    pages = [d for s in steps if s.tool.startswith("browser.") and (d := _json_dict(s.result))]
-    corpus = _flat(" ".join(f"{d.get('pagina', '')} {d.get('titulo', '')}" for d in pages))
+    corpus = _corpus(steps)
     if not corpus.strip():
         return []
-    missing = []
-    for match in _QUOTED.finditer(answer):
-        cited = next(g for g in match.groups() if g).translate(_QUOTE_CHARS).strip()
-        needle = _flat(cited).rstrip(" .…")
-        if needle and needle not in corpus:
-            missing.append(cited)
-    return missing
+    return [c for c in _citations(answer) if (n := _flat(c).rstrip(" .…")) and n not in corpus]
+
+
+OPENED = re.compile(r"\bhe abierto\b|\babr[ií]\b|\bopened\b", re.IGNORECASE)
+
+
+def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
+    """Dice haber abierto un elemento que cita (y que sí salió en una página), pero la página en la que acabó no es la suya."""
+    if not OPENED.search(answer):
+        return None
+    corpus = _corpus(steps)
+    named = [c for c in _citations(answer) if _flat(c).rstrip(" .…") in corpus and len(c) >= 12]
+    here = next((d for d in reversed(_page_dicts(steps)) if d.get("titulo")), None)
+    if not named or here is None:
+        return None
+    title = _flat(here["titulo"])
+    if any(_flat(c).rstrip(" .…") in title for c in named):
+        return None
+    return (
+        f"No he abierto «{named[0]}»: la página en la que estoy es «{here['titulo']}» ({here.get('url', '')}). "
+        "Solo vi ese nombre en una lista."
+    )
 
 
 def _grounded(answer: str, steps: list[Step]) -> str:
@@ -294,6 +320,9 @@ def _grounded(answer: str, steps: list[Step]) -> str:
         failure = _honest_failure(actions[-1])
         if failure is not None:
             return failure
+    elsewhere = _opened_elsewhere(answer, steps)
+    if elsewhere:
+        return elsewhere
     if any(s.tool.startswith("browser.") or s.tool in BROWSER_TURN_TOOLS for s in steps) and not NEGATION.search(
         answer
     ):

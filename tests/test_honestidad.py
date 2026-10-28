@@ -161,7 +161,7 @@ def test_el_prompt_lleva_las_reglas(frase: str) -> None:
 
 
 def test_dos_citas_con_comillas_rectas_no_se_emparejan_entre_si() -> None:
-    respuesta = 'No hay opción de "más visto" en la página. Abrí "Palit GeForce RTX 5060 Ti Dual 8GB GDDR7" sin más.'
+    respuesta = 'No hay opción de "más visto" en la página. Vi "Palit GeForce RTX 5060 Ti Dual 8GB GDDR7" sin más.'
     assert _grounded(respuesta, [paso_pagina(PAGINA)]) == respuesta
 
 
@@ -186,3 +186,30 @@ def test_he_abierto_tras_un_clic_que_cambio_la_url_se_respeta() -> None:
 def test_he_abierto_con_un_clic_que_no_cambio_nada_se_corrige() -> None:
     texto = _grounded("He abierto el vídeo.", [clic(True, url_cambio=False, cambio_visible=False)])
     assert "no ha cambiado" in texto
+
+
+# --- «he abierto "X"» sin haber llegado a X ---------------------------------------------------------------------
+
+
+def lista(titulo: str, url: str = "https://yt.com/results") -> Step:
+    pagina_ = '[e4] link "Os enseño mi mayor desastre financiero y ponemos un alerón a un M4 29 minutos"'
+    return Step("browser.snapshot", {}, json.dumps({"ok": True, "url": url, "titulo": titulo, "pagina": pagina_}), True)
+
+
+def test_dice_haber_abierto_un_video_que_solo_vio_en_una_lista() -> None:
+    respuesta = 'He abierto el primer vídeo: "Os enseño mi mayor desastre financiero y ponemos un alerón a un M4".'
+    texto = _grounded(respuesta, [lista("canal Hrom - YouTube")])
+    assert texto.startswith("No he abierto «Os enseño") and "canal Hrom - YouTube" in texto
+
+
+def test_abrir_un_elemento_cuyo_titulo_es_el_de_la_pagina_actual_se_respeta() -> None:
+    respuesta = 'He abierto "Os enseño mi mayor desastre financiero y ponemos un alerón a un M4".'
+    pagina_final = lista(
+        "Os enseño mi mayor desastre financiero y ponemos un alerón a un M4 - YouTube", "https://yt.com/watch?v=1"
+    )
+    assert _grounded(respuesta, [lista("canal Hrom - YouTube"), pagina_final]) == respuesta
+
+
+def test_he_abierto_la_busqueda_no_se_confunde_con_abrir_un_elemento() -> None:
+    respuesta = "He abierto la búsqueda de asyncio en el navegador."
+    assert _grounded(respuesta, [lista("asyncio - Buscar")]) == respuesta
