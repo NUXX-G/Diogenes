@@ -44,12 +44,16 @@ def _is_http_url(url: str) -> bool:
 _REF_ATTR = re.compile(r" ?\[ref=[\w-]+\]")
 
 
-async def _fingerprint(page: BrowserPage) -> str | None:
-    """Huella del contenido de la página (sin los refs, que pueden renumerarse) para comprobar si una acción cambió algo."""
+async def _read(page: BrowserPage) -> str | None:
     try:
-        return hashlib.sha1(_REF_ATTR.sub("", await page.aria()).encode()).hexdigest()
+        return await page.aria()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _digest(text: str | None) -> str | None:
+    """Huella del contenido de la página (sin los refs, que pueden renumerarse) para comprobar si una acción cambió algo."""
+    return None if text is None else hashlib.sha1(_REF_ATTR.sub("", text).encode()).hexdigest()
 
 
 def _changed(before: str | None, after: str | None) -> bool | None:
@@ -79,6 +83,20 @@ class BrowserService:
         url, title = await page.current()
         return {"url": url, "titulo": title}
 
+    async def _observe(self, page: BrowserPage, before: str | None = None) -> dict[str, Any]:
+        """Lee la página tras una acción: deja los refs vigentes y la devuelve ya compactada, para no gastar un snapshot."""
+        text = await _read(page)
+        state = await self._state(page)
+        if text is None:
+            self._nodes = {}
+            return {**state, "cambio_visible": None}
+        self._nodes = {n.ref: n for n in snapshot.parse(text) if n.ref}
+        return {
+            **state,
+            "cambio_visible": _changed(before, _digest(text)),
+            "pagina": snapshot.compact(text, url=state["url"], title=state["titulo"]),
+        }
+
     async def open(self, url: str) -> dict[str, Any]:
         if not _is_http_url(url):
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
@@ -87,22 +105,16 @@ class BrowserService:
             await page.goto(url)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "mensaje": f"No se pudo abrir {url}: {type(exc).__name__}"}
-        self._nodes = {}
         self._form_dirty = False
-        return {"ok": True, "mensaje": f"Abierto {url}", **await self._state(page)}
+        seen = await self._observe(page)
+        seen.pop("cambio_visible")
+        return {"ok": True, "mensaje": f"Abierto {url}", **seen}
 
     async def snapshot(self) -> dict[str, Any]:
         page = await self._provider.page()
-        text = await page.aria()
-        url, title = await page.current()
-        self._nodes = {n.ref: n for n in snapshot.parse(text) if n.ref}
-        return {
-            "ok": True,
-            "mensaje": f"{len(self._nodes)} elementos",
-            "url": url,
-            "titulo": title,
-            "pagina": snapshot.compact(text, url=url, title=title),
-        }
+        seen = await self._observe(page)
+        seen.pop("cambio_visible")
+        return {"ok": True, "mensaje": f"{len(self._nodes)} elementos", **seen}
 
     async def click(self, ref: str, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
@@ -118,7 +130,7 @@ class BrowserService:
                 return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
         page = await self._provider.page()
         before = (await page.current())[0]
-        seen_before = await _fingerprint(page)
+        seen_before = _digest(await _read(page))
         try:
             await page.click(ref)
         except Exception as exc:  # noqa: BLE001
@@ -126,17 +138,15 @@ class BrowserService:
                 "ok": False,
                 "mensaje": f"No se pudo hacer clic en {ref}: {type(exc).__name__}. Haz un snapshot nuevo.",
             }
-        state = await self._state(page)
-        self._nodes = {}  # la página ha podido cambiar: los refs viejos ya no valen
-        if state["url"] != before or confirmado:
+        seen = await self._observe(page, seen_before)  # la página ha podido cambiar: se devuelven los refs nuevos
+        moved = seen["url"] != before
+        if moved or confirmado:
             self._form_dirty = False
-        cambio = _changed(seen_before, await _fingerprint(page))
         return {
             "ok": True,
-            "mensaje": f"Clic en {ref}" + ("" if cambio or state["url"] != before else ". La página NO ha cambiado."),
-            "url_cambio": state["url"] != before,
-            "cambio_visible": cambio,
-            **state,
+            "mensaje": f"Clic en {ref}" + ("" if seen["cambio_visible"] or moved else ". La página NO ha cambiado."),
+            "url_cambio": moved,
+            **seen,
         }
 
     async def type(self, ref: str, text: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
@@ -153,7 +163,7 @@ class BrowserService:
         if enter and not is_search and not confirmado:
             return _confirmation("browser.type", ref, node.name, "envío de un formulario que no es un buscador")
         before = (await page.current())[0]
-        seen_before = await _fingerprint(page)
+        seen_before = _digest(await _read(page))
         try:
             await page.fill(ref, text, enter)
         except Exception as exc:  # noqa: BLE001
@@ -163,9 +173,7 @@ class BrowserService:
             }
         if not is_search:
             self._form_dirty = not enter
-        state = await self._state(page)
-        self._nodes = {}
-        cambio = _changed(seen_before, await _fingerprint(page))
+        seen = await self._observe(page, seen_before)  # los refs siguen siendo válidos tras escribir
         mensaje = f"Escrito en {ref}"
         if enter_ignorado:
             mensaje += (
@@ -177,9 +185,8 @@ class BrowserService:
             "mensaje": mensaje,
             "enter_pulsado": enter,
             "enter_ignorado": enter_ignorado,
-            "url_cambio": state["url"] != before,
-            "cambio_visible": cambio,
-            **state,
+            "url_cambio": seen["url"] != before,
+            **seen,
         }
 
     def _search_field(self) -> snapshot.Node | None:
@@ -212,9 +219,10 @@ class BrowserService:
     async def back(self) -> dict[str, Any]:
         page = await self._provider.page()
         await page.back()
-        self._nodes = {}
         self._form_dirty = False
-        return {"ok": True, "mensaje": "Atrás", **await self._state(page)}
+        seen = await self._observe(page)
+        seen.pop("cambio_visible")
+        return {"ok": True, "mensaje": "Atrás", **seen}
 
     async def current(self) -> dict[str, Any]:
         page = await self._provider.page()

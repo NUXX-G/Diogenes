@@ -282,9 +282,9 @@ async def test_solo_el_ultimo_snapshot_se_conserva_en_el_historial() -> None:
         agente = Agent(llm, McpTools(client), policy=POLICY)
         await agente.run("mira")
     snaps = [m.content for m in agente.history if m.role == "tool"]
-    assert snaps[0] == SNAPSHOT_STUB
-    assert snaps[1].startswith("[CONTENIDO DE LA PÁGINA")
-    assert "{" not in snaps[1][:5]  # llega como texto plano, no como JSON con escapes
+    assert snaps[0].endswith(SNAPSHOT_STUB) and snaps[0].startswith("3 elementos")  # queda la línea de estado
+    assert "[CONTENIDO DE LA PÁGINA" in snaps[1]
+    assert not snaps[1].startswith("{")  # texto plano, no JSON con escapes
 
 
 # --- Enter en un textarea no envía; hay que pulsar el botón (con su propia confirmación) --------------------
@@ -386,3 +386,44 @@ def test_el_prompt_exige_verificar_antes_de_afirmar() -> None:
 
     assert "Escribir en un campo NO es enviar" in SYSTEM_PROMPT
     assert "enter no envía" in SYSTEM_PROMPT
+
+
+# --- cada acción devuelve la página nueva con refs vigentes (sin gastar un snapshot) --------------------
+
+
+async def test_type_devuelve_la_pagina_y_el_clic_siguiente_funciona_sin_snapshot() -> None:
+    page = FakePage(MENSAJE, multiline={"e1"}, navigates=False, on_click={"e2": MENSAJE_ENVIADO})
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    escrito = await svc.type("e1", "hola", False)
+    assert "[e2] button" in escrito["pagina"]  # refs actualizados en la propia respuesta
+    pendiente = await svc.click("e2")  # antes: «ref desconocido» y un paso perdido
+    assert pendiente["requiere_confirmacion"] is True
+
+
+async def test_ref_que_ya_no_esta_en_la_pagina_nueva_se_rechaza() -> None:
+    page = FakePage(MENSAJE, navigates=False, on_click={"e2": '- main:\n  - link "Otra cosa" [ref=e9]'})
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    await svc.click("e2", confirmado=True)
+    assert (await svc.click("e1"))["ok"] is False
+    assert (await svc.click("e9"))["ok"] is True
+
+
+async def test_el_agente_ve_la_linea_de_estado_y_la_pagina_en_texto_plano() -> None:
+    page = FakePage(MENSAJE, navigates=False, on_click={"e2": MENSAJE_ENVIADO})
+    llm = FakeLLM(llamar("browser_snapshot"), llamar("browser_click", ref="e2"), decir("ok"))
+    svc = BrowserService(Provider(page), RULES)
+    async with Client(build_server(AppIndex(), browser=svc)) as client:
+        agente = Agent(llm, McpTools(client), policy=POLICY, confirm=aprobar())
+        await agente.run("manda")
+    ultimo = [m.content for m in agente.history if m.role == "tool"][-1]
+    assert ultimo.startswith("Clic en e2 · url_cambio=false · cambio_visible=true\n[CONTENIDO DE LA PÁGINA")
+
+
+async def test_solo_la_primera_accion_del_navegador_por_respuesta_se_ejecuta() -> None:
+    dos = LLMResponse("", (ToolCall("browser_click", {"ref": "e3"}), ToolCall("browser_click", {"ref": "e2"})))
+    llm = FakeLLM(llamar("browser_snapshot"), dos, decir("ok"))
+    resultado, page, _ = await ejecutar_con(llm, FakePage(INYECCION), aprobar())
+    assert [s.tool for s in resultado.steps] == ["browser.snapshot", "browser.click"]
+    assert clics(page) == [("click", "e3")]

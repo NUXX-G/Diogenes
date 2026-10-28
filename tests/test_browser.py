@@ -156,8 +156,8 @@ async def test_ref_inventado_o_viejo_se_rechaza() -> None:
     await svc.snapshot()
     assert (await svc.click("e999"))["ok"] is False
     await svc.click("e10")
-    assert (await svc.click("e8"))["ok"] is False  # tras actuar hay que hacer un snapshot nuevo
-    assert [c for c in page.calls if c[0] == "click"] == [("click", "e10")]
+    assert (await svc.click("e8"))["ok"] is True  # los refs siguen valiendo si el elemento sigue en la página
+    assert [c for c in page.calls if c[0] == "click"] == [("click", "e10"), ("click", "e8")]
 
 
 async def test_type_con_enter() -> None:
