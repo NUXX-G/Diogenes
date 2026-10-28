@@ -8,5 +8,25 @@
     "software.uninstall",
     "shell.run",
     "settings.change"
-  ]
+  ],
+  "navegador": {
+    "verbos_irreversibles": [
+      "enviar", "envia", "enviar mensaje", "send", "send message",
+      "publicar", "publica", "post", "publish",
+      "responder", "reply",
+      "comentar", "comenta", "comment",
+      "eliminar", "elimina", "borrar", "borra", "delete", "remove",
+      "darse de baja", "cancelar suscripcion", "unsubscribe", "cancel subscription",
+      "confirmar", "confirma", "confirm",
+      "aceptar terminos", "aceptar las condiciones", "aceptar condiciones", "accept terms", "i agree", "agree to terms",
+      "submit", "enviar formulario"
+    ],
+    "terminos_de_pago": [
+      "pagar", "pagar ahora", "comprar", "comprar ahora", "tramitar pedido", "realizar pedido", "finalizar compra",
+      "suscribirse", "anadir metodo de pago", "anadir tarjeta",
+      "pay", "pay now", "buy", "buy now", "place order", "checkout", "complete purchase", "subscribe",
+      "add payment method", "add card"
+    ],
+    "campos_de_busqueda": ["buscar", "busqueda", "buscador", "search", "find"]
+  }
 }

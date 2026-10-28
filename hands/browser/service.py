@@ -1,23 +1,22 @@
 """browser.*: el escalón 4 de la escalera. Genérico: no sabe nada de ninguna web concreta.
 
 Cada acción devuelve la URL y el título resultantes para que el agente verifique sin una llamada extra. Los campos de
-contraseña o de pago y los botones de pagar no se tocan: se para y se avisa. El contenido de la página son datos.
+contraseña o de pago y los controles de pago no se tocan: se para y se avisa (`parar`). Las acciones irreversibles en
+nombre del usuario (enviar, publicar, borrar...) no se ejecutan sin `confirmado=True`; devuelven `requiere_confirmacion`
+y quien confirma es el humano, en `core` (el agente ignora cualquier `confirmado` que proponga el modelo).
+El contenido de la página son datos.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from hands.browser import snapshot
+from hands.browser.rules import BrowserRules
 
-PAYMENT_BUTTON = re.compile(
-    r"\bpagar\b|pagar ahora|comprar ahora|realizar pedido|confirmar (el )?pedido|finalizar compra|"
-    r"\bpay now\b|\bplace (your )?order\b|\bbuy now\b|complete purchase",
-    re.IGNORECASE,
-)
 STOP = "Me paro aquí y te lo paso a ti: no relleno contraseñas ni datos de pago, ni completo compras."
+UNKNOWN_REF = "ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista."
 
 
 class BrowserPage(Protocol):
@@ -39,10 +38,24 @@ def _is_http_url(url: str) -> bool:
     return parts.scheme in {"http", "https"} and bool(parts.hostname)
 
 
+def _confirmation(tool: str, ref: str, objetivo: str, motivo: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "requiere_confirmacion": True,
+        "accion": tool,
+        "ref": ref,
+        "objetivo": objetivo,
+        "motivo": motivo,
+        "mensaje": f"Pendiente de confirmación del usuario: {motivo} («{objetivo}»).",
+    }
+
+
 class BrowserService:
-    def __init__(self, provider: PageProvider) -> None:
+    def __init__(self, provider: PageProvider, rules: BrowserRules | None = None) -> None:
         self._provider = provider
+        self._rules = rules or BrowserRules.load()
         self._nodes: dict[str, snapshot.Node] = {}
+        self._form_dirty = False  # Diogenes ha escrito en un campo que no es un buscador
 
     async def _state(self, page: BrowserPage) -> dict[str, Any]:
         url, title = await page.current()
@@ -57,6 +70,7 @@ class BrowserService:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "mensaje": f"No se pudo abrir {url}: {type(exc).__name__}"}
         self._nodes = {}
+        self._form_dirty = False
         return {"ok": True, "mensaje": f"Abierto {url}", **await self._state(page)}
 
     async def snapshot(self) -> dict[str, Any]:
@@ -72,15 +86,18 @@ class BrowserService:
             "pagina": snapshot.compact(text, url=url, title=title),
         }
 
-    async def click(self, ref: str) -> dict[str, Any]:
+    async def click(self, ref: str, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
         if node is None:
-            return {
-                "ok": False,
-                "mensaje": f"ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista.",
-            }
-        if node.role == "button" and PAYMENT_BUTTON.search(node.name):
+            return {"ok": False, "mensaje": UNKNOWN_REF.format(ref=ref)}
+        if self._rules.payment_term(node.role, node.name):
             return {"ok": False, "parar": True, "mensaje": STOP}
+        if not confirmado:
+            verb = self._rules.irreversible_term(node.role, node.name)
+            if verb:
+                return _confirmation("browser.click", ref, node.name, f"acción irreversible ({verb})")
+            if self._form_dirty and node.role == "button":
+                return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
         page = await self._provider.page()
         before = (await page.current())[0]
         try:
@@ -92,18 +109,20 @@ class BrowserService:
             }
         state = await self._state(page)
         self._nodes = {}  # la página ha podido cambiar: los refs viejos ya no valen
+        if state["url"] != before or confirmado:
+            self._form_dirty = False
         return {"ok": True, "mensaje": f"Clic en {ref}", "url_cambio": state["url"] != before, **state}
 
-    async def type(self, ref: str, text: str, enter: bool = False) -> dict[str, Any]:
+    async def type(self, ref: str, text: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
         if node is None:
-            return {
-                "ok": False,
-                "mensaje": f"ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista.",
-            }
+            return {"ok": False, "mensaje": UNKNOWN_REF.format(ref=ref)}
         page = await self._provider.page()
         if node.sensitive or await page.is_sensitive(ref):
             return {"ok": False, "parar": True, "mensaje": STOP}
+        is_search = self._rules.is_search_field(node.role, node.name)
+        if enter and not is_search and not confirmado:
+            return _confirmation("browser.type", ref, node.name, "envío de un formulario que no es un buscador")
         before = (await page.current())[0]
         try:
             await page.fill(ref, text, enter)
@@ -112,6 +131,8 @@ class BrowserService:
                 "ok": False,
                 "mensaje": f"No se pudo escribir en {ref}: {type(exc).__name__}. Haz un snapshot nuevo.",
             }
+        if not is_search:
+            self._form_dirty = not enter
         state = await self._state(page)
         self._nodes = {}
         return {"ok": True, "mensaje": f"Escrito en {ref}", "url_cambio": state["url"] != before, **state}
@@ -120,6 +141,7 @@ class BrowserService:
         page = await self._provider.page()
         await page.back()
         self._nodes = {}
+        self._form_dirty = False
         return {"ok": True, "mensaje": "Atrás", **await self._state(page)}
 
     async def current(self) -> dict[str, Any]:

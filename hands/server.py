@@ -177,10 +177,15 @@ def build_server(
 
         @server.tool(
             name="browser.click",
-            description="Hace clic en un elemento del último snapshot por su ref (p. ej. e12). Devuelve url y título.",
+            description=(
+                "Hace clic en un elemento del último snapshot por su ref (p. ej. e12). Devuelve url y título. "
+                "Si devuelve requiere_confirmacion, el usuario decide: no insistas."
+            ),
         )
-        async def browser_click(ref: str) -> dict[str, Any]:
-            return await audited("browser.click", {"ref": ref}, lambda: browser.click(ref))
+        async def browser_click(ref: str, confirmado: bool = False) -> dict[str, Any]:
+            return await audited(
+                "browser.click", {"ref": ref, "confirmado": confirmado}, lambda: browser.click(ref, confirmado)
+            )
 
         @server.tool(
             name="browser.type",
@@ -189,9 +194,13 @@ def build_server(
                 "Nunca en campos de contraseña o de pago."
             ),
         )
-        async def browser_type(ref: str, texto: str, enter: bool = False) -> dict[str, Any]:
+        async def browser_type(ref: str, texto: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
             # el texto escrito no se registra en el log: puede ser el contenido de un formulario
-            return await audited("browser.type", {"ref": ref, "enter": enter}, lambda: browser.type(ref, texto, enter))
+            return await audited(
+                "browser.type",
+                {"ref": ref, "enter": enter, "confirmado": confirmado},
+                lambda: browser.type(ref, texto, enter, confirmado),
+            )
 
         @server.tool(name="browser.back", description="Vuelve a la página anterior del navegador.")
         async def browser_back() -> dict[str, Any]:
