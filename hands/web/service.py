@@ -1,11 +1,12 @@
 """web.open y web.site_search: abrir una URL y buscar dentro de cualquier web, descubriendo cómo busca.
 
 Orden de estrategias (la más barata primero): 1) plantilla ya aprendida, 2) descriptor OpenSearch de la web,
-3) automatización con navegador (hueco para la fase 6). La plantilla que funciona se guarda en SQLite.
+3) automatización con el navegador de Diogenes (browser.*). La plantilla que funciona se guarda en SQLite.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import webbrowser
 from collections.abc import Callable, Sequence
@@ -15,12 +16,18 @@ from urllib.parse import quote_plus, urlsplit
 import httpx
 
 from hands.apps.models import normalize
+from hands.browser.service import BrowserService
 from hands.web.fetch import Fetcher, FetchResult
 from hands.web.opensearch import PLACEHOLDER
 from hands.web.store import TemplateStore
 from hands.web.strategies import BrowserSearchStrategy, OpenSearchStrategy, SearchStrategy
 
 Opener = Callable[[str], None]
+
+log = logging.getLogger("hands.web")
+DIOGENES_BROWSER = "navegador de Diogenes"
+SYSTEM_BROWSER = "navegador del sistema"
+STRATEGY_LABELS = {"aprendida": "plantilla aprendida", "opensearch": "OpenSearch", "navegador": "navegador"}
 
 # Para un nombre sin dominio ("youtube") se prueban dominios habituales; no hay ninguna web escrita a mano.
 TLDS = ("com", "es", "org", "net", "tv", "io")
@@ -67,10 +74,12 @@ class WebService:
         fetch: Fetcher,
         opener: Opener = open_in_browser,
         strategies: Sequence[SearchStrategy] | None = None,
+        browser: BrowserService | None = None,
     ) -> None:
         self._store = store
         self._fetch = fetch
         self._open = opener
+        self._browser = browser
         self._strategies = (
             list(strategies)
             if strategies is not None
@@ -80,11 +89,37 @@ class WebService:
             ]
         )
 
+    async def _show(self, url: str) -> str:
+        """Abre la URL en el Chrome de Diogenes (para poder seguir con browser.*) y, si no se puede, en el del sistema."""
+        if self._browser is not None:
+            try:
+                if (await self._browser.open(url)).get("ok"):
+                    return DIOGENES_BROWSER
+            except Exception:
+                log.warning("no se pudo usar el navegador de Diogenes; se usa el del sistema", exc_info=True)
+        self._open(url)
+        return SYSTEM_BROWSER
+
     async def open(self, url: str) -> dict[str, Any]:
         if not _is_http_url(url):
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
-        self._open(url)
-        return {"ok": True, "mensaje": f"Abierto {url}", "url": url}
+        where = await self._show(url)
+        return {"ok": True, "mensaje": f"Abierto {url} en el {where}", "url": url, "abierto_en": where}
+
+    def _found(self, site: str, url: str, origin: str, where: str) -> dict[str, Any]:
+        label = STRATEGY_LABELS.get(origin, origin)
+        return {
+            "ok": True,
+            "mensaje": f"Resultados de {site} abiertos en el {where} (estrategia: {label})",
+            "url": url,
+            "origen": origin,
+            "estrategia": label,
+            "abierto_en": where,
+            "siguiente": (
+                "Si la petición era solo buscar, has terminado. Si pedía algo más (abrir un resultado concreto, "
+                "ordenar, leer un dato), la página ya está abierta: sigue con browser_snapshot y browser_click."
+            ),
+        }
 
     async def site_search(self, site: str, query: str) -> dict[str, Any]:
         key = _site_key(site)
@@ -94,42 +129,43 @@ class WebService:
         learned = self._store.get(key)
         if learned is not None:
             url = self._build_url(learned.template, query)
-            self._open(url)
+            where = await self._show(url)
             self._store.record_success(key)
-            return {
-                "ok": True,
-                "mensaje": f"Resultados de {site} abiertos en el navegador (plantilla aprendida)",
-                "url": url,
-                "origen": "aprendida",
-            }
+            return self._found(site, url, "aprendida", where)
 
         page = await self._home(site)
+        by_browser_only = False
+        candidates = _candidates(site)
+        if page is None and len(candidates) == 1 and any(self._browser_verified(s) for s in self._strategies):
+            # la descarga HTTP falla (a menudo, protección anti-bots) pero el dominio es explícito: que lo intente el navegador
+            page, by_browser_only = FetchResult(candidates[0], 0, ""), True
         if page is None:
             return {"ok": False, "mensaje": f"No he podido abrir la web '{site}'. ¿Puedes darme el dominio exacto?"}
 
         intentadas = []
         for strategy in self._strategies:
+            if by_browser_only and not self._browser_verified(strategy):
+                continue
             intentadas.append(strategy.name)
             template = await strategy.discover(page, query)
             if template is None or not _same_site(template, page.url):
                 continue
             url = self._build_url(template, query)
-            if not await self._works(url):
+            if not self._browser_verified(strategy) and not await self._works(url):
                 continue
             self._store.save(key, page.url, template, strategy.name)
-            self._open(url)
-            return {
-                "ok": True,
-                "mensaje": f"Resultados de {site} abiertos en el navegador ({strategy.name})",
-                "url": url,
-                "origen": strategy.name,
-            }
+            return self._found(site, url, strategy.name, await self._show(url))
 
         return {
             "ok": False,
             "mensaje": f"No he descubierto cómo se busca en {site} (probado: {', '.join(intentadas)}). "
-            "La automatización con navegador aún no está disponible.",
+            "Si la web está abierta en el navegador de Diogenes, puedes pedirme que use su buscador paso a paso.",
         }
+
+    @staticmethod
+    def _browser_verified(strategy: SearchStrategy) -> bool:
+        """El navegador ya cargó de verdad la página de resultados: repetirlo por HTTP solo añade falsos fallos."""
+        return bool(getattr(strategy, "verified_by_browser", False))
 
     @staticmethod
     def _build_url(template: str, query: str) -> str:

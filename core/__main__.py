@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Awaitable, Callable
@@ -22,7 +23,15 @@ SALIR = {"salir", "exit", "quit"}
 
 def format_step(step: Step) -> str:
     args = ", ".join(f"{k}={v!r}" for k, v in step.arguments.items())
-    return f"  {'✓' if step.ok else '✗'} {step.tool}({args})"
+    line = f"  {'✓' if step.ok else '✗'} {step.tool}({args})"
+    try:
+        data = json.loads(step.result)
+    except json.JSONDecodeError:
+        return line
+    if isinstance(data, dict) and data.get("abierto_en"):  # web.open / web.site_search: cómo y dónde se hizo
+        how = f"{data['estrategia']} · " if data.get("estrategia") else ""
+        line += f"  → {how}{data['abierto_en']}"
+    return line
 
 
 async def repl(

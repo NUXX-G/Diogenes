@@ -60,3 +60,6 @@ Desktop.ini
 # --- Registro de acciones (modo personal) ---
 logs/
 data/
+
+# Perfil dedicado del navegador de Diogenes (nunca el personal)
+data/browser-profile/

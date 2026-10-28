@@ -35,6 +35,10 @@ class McpTools:
 
 
 async def connect_hands(stack: AsyncExitStack, url: str, token: str) -> McpTools:
-    http = await stack.enter_async_context(httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}))
+    # tiempos recomendados por MCP: una acción del navegador puede tardar bastante más que los 5 s por defecto
+    timeout = httpx2.Timeout(30.0, read=300.0)
+    http = await stack.enter_async_context(
+        httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+    )
     client = await stack.enter_async_context(Client(streamable_http_client(url, http_client=http)))
     return McpTools(client)

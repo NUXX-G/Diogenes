@@ -169,13 +169,14 @@ Prioridad absoluta: **el modo clase listo para el 11 de diciembre** (ver `README
 
 1. **Esqueleto**: `hands-mcp` con `apps.search` y `apps.launch` (índice del menú Inicio + Steam + Epic) y un CLI de texto en `core` que llama al LLM con esas herramientas. Hito: «abre Spotify» y «abre Brawlhalla» funcionan escritos.
 2. **Web**: `web.open` y `web.site_search` con OpenSearch y plantillas aprendidas. Hito: «búscame en YouTube cómo hacer mochis».
-3. **Recetas**: guardado, reutilización y degradación. Hito: la segunda petición del mismo tipo no llama al LLM para navegar.
-4. **Sistema y multimedia**: atajos del router, volumen, ventanas. Botón del pánico.
-5. **Voz**: push-to-talk, STT y TTS. Hito: los tres ejemplos de arriba funcionan hablando.
-6. **Navegador e interfaz nativa**: Playwright por CDP y árbol UIA. Hito: una tarea dentro de una app sin protocolo ni búsqueda por URL.
-7. **Visión**: `screen.look` como último recurso.
-8. **Overlay y personaje**.
-9. **Wake word propia** «Diógenes».
+3. **Navegador**: `browser.*` con Playwright por CDP (escalón 4), genérico y sin código por web. Hito: «dame el vídeo más visto del canal Hrom» y «búscame en Wikipedia Diógenes de Sinope». *Adelantada desde la fase 6*: peticiones como «dame el vídeo más visto del canal X» necesitan varios pasos dentro de una web (abrir canal, pestaña de vídeos, ordenar, abrir el primero) y hoy solo se sabe buscar. También cubre el hueco de `web.site_search` cuando no hay plantilla ni OpenSearch.
+4. **Recetas**: guardado, reutilización y degradación. Hito: la segunda petición del mismo tipo no llama al LLM para navegar. (Pasa después del navegador porque las secuencias del navegador son lo que más conviene aprender.)
+5. **Sistema y multimedia**: atajos del router, volumen, ventanas. Botón del pánico.
+6. **Voz**: push-to-talk, STT y TTS. Hito: los tres ejemplos de arriba funcionan hablando.
+7. **Interfaz nativa**: árbol UIA. Hito: una tarea dentro de una app sin protocolo ni búsqueda por URL.
+8. **Visión**: `screen.look` como último recurso.
+9. **Overlay y personaje**.
+10. **Wake word propia** «Diógenes».
 
 ## Personaje (opcional, fase 8)
 
