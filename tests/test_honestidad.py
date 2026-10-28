@@ -213,3 +213,48 @@ def test_abrir_un_elemento_cuyo_titulo_es_el_de_la_pagina_actual_se_respeta() ->
 def test_he_abierto_la_busqueda_no_se_confunde_con_abrir_un_elemento() -> None:
     respuesta = "He abierto la búsqueda de asyncio en el navegador."
     assert _grounded(respuesta, [lista("asyncio - Buscar")]) == respuesta
+
+
+# --- la ordenación solo vale mientras la lista ordenada siga siendo aquella de la que se responde ---------------
+
+
+def orden(url: str, **extra: Any) -> Step:
+    datos = {"ok": True, "url": url, "titulo": "T", "url_cambio": False, "cambio_visible": True, "criterio": ["barato"]}
+    return Step("browser.click", {"ref": "e1"}, json.dumps({**datos, **extra}), True)
+
+
+def navegar(url: str, tool: str = "browser.click") -> Step:
+    datos = {"ok": True, "url": url, "titulo": "T", "url_cambio": True, "cambio_visible": True, "criterio": []}
+    return Step(tool, {"ref": "e2"}, json.dumps(datos), True)
+
+
+LISTA = "https://tienda.com/search?query=rtx"
+
+
+def test_ordenar_y_abrir_un_elemento_de_la_lista_respalda_el_mas_barato() -> None:
+    pasos = [orden(LISTA + "&sort=price_asc", url_cambio=True), navegar("https://tienda.com/producto/palit")]
+    assert _grounded("El más barato es la Palit.", pasos) == "El más barato es la Palit."
+
+
+def test_ordenar_y_lanzar_otra_busqueda_en_la_misma_pagina_pierde_el_respaldo() -> None:
+    """Caso real de pccomponentes: tras «Precio más bajo» pulsó una sugerencia del buscador."""
+    pasos = [orden(LISTA), navegar("https://tienda.com/search/?query=rtx+5060+16gb")]
+    assert "no he podido comprobar que sea el más barato" in _grounded("La más barata es la ASUS.", pasos).lower()
+
+
+def test_volver_a_abrir_una_url_pierde_el_respaldo() -> None:
+    pasos = [orden(LISTA), navegar("https://tienda.com/search?query=otra", tool="web.site_search")]
+    assert "no he podido comprobar" in _grounded("El más barato es X.", pasos).lower()
+
+
+def test_un_clic_que_no_cambia_de_url_mantiene_el_respaldo() -> None:
+    pasos = [
+        orden(LISTA),
+        Step(
+            "browser.click",
+            {"ref": "e3"},
+            json.dumps({"ok": True, "url": LISTA, "url_cambio": False, "cambio_visible": True, "criterio": []}),
+            True,
+        ),
+    ]
+    assert _grounded("El más barato es X.", pasos) == "El más barato es X."

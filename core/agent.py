@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.choices import PendingChoice, ask_again, is_affirmation, parse_options, resolve
 from core.llm.base import LLMProvider, Message, ToolCall, ToolSpec
@@ -237,14 +238,35 @@ NEGATION = re.compile(
 BROWSER_TURN_TOOLS = frozenset({"web.site_search", "web.open"})
 
 
+def _listing(url: str) -> tuple[str, str]:
+    parts = urlsplit(url)
+    return parts.netloc, parts.path.rstrip("/")
+
+
+NAVIGATES_BY_URL = frozenset({"web.site_search", "web.open", "browser.open"})
+
+
 def _backed_criteria(steps: list[Step]) -> set[str]:
-    """Criterios que la web garantiza en este turno: un clic en su ordenación/filtro tras el que la página cambió."""
-    backed: set[str] = set()
+    """Criterios que la web garantiza en este turno: un clic en su ordenación/filtro tras el que la página cambió, y
+    que sigue vigente. Se pierde si después se lanza otra búsqueda o se vuelve a abrir una URL (otra lista en la misma
+    página, p. ej. una sugerencia del buscador); abrir un elemento de la lista ordenada (otra página) no la pierde."""
+    backed: dict[str, str] = {}  # criterio → URL tras aplicarlo
     for step in steps:
-        data = _json_dict(step.result) if step.tool == "browser.click" else None
-        if data and data.get("ok") is True and (data.get("url_cambio") is True or data.get("cambio_visible") is True):
-            backed.update(data.get("criterio") or [])
-    return backed
+        if step.tool in NAVIGATES_BY_URL:
+            backed.clear()
+            continue
+        data = _json_dict(step.result) if step.tool in ACTION_TOOLS else None
+        if not data or data.get("ok") is not True:
+            continue
+        url = str(data.get("url", ""))
+        if data.get("url_cambio") is True:
+            for key, applied_at in list(backed.items()):
+                if _listing(applied_at) == _listing(url) and applied_at != url:
+                    del backed[key]
+        if step.tool == "browser.click" and (data.get("url_cambio") is True or data.get("cambio_visible") is True):
+            for key in data.get("criterio") or []:
+                backed[key] = url
+    return set(backed)
 
 
 def _unbacked_answer(keys: list[str], steps: list[Step]) -> str:
