@@ -108,6 +108,24 @@ async def test_buscador_tras_un_icono() -> None:
     assert template == "https://www.ejemplo.com/buscar?q={query}"
 
 
+class LateSearchSite(FakeSite):
+    """Una SPA: el buscador se pinta después de cargar."""
+
+    def __init__(self) -> None:
+        super().__init__('- link "Inicio" [ref=e2]')
+        self._reads = 0
+
+    async def aria(self) -> str:
+        self._reads += 1
+        return HOME if self._reads >= 2 else await super().aria()
+
+
+async def test_buscador_que_aparece_tarde_se_espera() -> None:
+    estrategia_con_espera = BrowserSearchStrategy(BrowserService(Provider(LateSearchSite()), RULES), wait_seconds=3.0)  # type: ignore[arg-type]
+    template = await estrategia_con_espera.discover(HOME_PAGE, "algo")
+    assert template == "https://www.ejemplo.com/buscar?q={query}"
+
+
 async def test_web_sin_buscador_no_descubre_nada() -> None:
     site = FakeSite('- link "Inicio" [ref=e1]')
     assert await estrategia(site).discover(HOME_PAGE, "algo") is None

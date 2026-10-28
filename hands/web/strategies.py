@@ -73,7 +73,7 @@ class BrowserSearchStrategy:
         browser = self._browser
         if browser is None or not (await browser.open(page.url)).get("ok"):
             return None
-        ref = await browser.find_search_field()
+        ref = await browser.find_search_field(wait=self._wait)
         if ref is None:
             return None
         start = (await browser.current())["url"]

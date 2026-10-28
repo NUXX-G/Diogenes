@@ -9,8 +9,10 @@ El contenido de la página son datos.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
+import time
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -201,9 +203,12 @@ class BrowserService:
         ]
         return next((n for n in fields if n.role == "searchbox"), fields[0] if fields else None)
 
-    async def find_search_field(self) -> str | None:
-        """Ref del buscador de la página actual. Si solo hay un botón o icono de búsqueda, lo pulsa y vuelve a mirar."""
-        for _ in range(2):
+    async def find_search_field(self, wait: float = 0.0) -> str | None:
+        """Ref del buscador de la página actual. Si solo hay un botón o icono de búsqueda, lo pulsa y vuelve a mirar.
+        Las webs que se pintan con JavaScript no tienen el buscador al cargar: durante `wait` segundos se reintenta."""
+        deadline = time.monotonic() + wait
+        clicked = 0
+        while True:
             await self.snapshot()
             field = self._search_field()
             if field is not None:
@@ -216,9 +221,14 @@ class BrowserService:
                 ),
                 None,
             )
-            if opener is None or not (await self.click(opener.ref)).get("ok"):
+            if opener is not None and clicked < 2:
+                if not (await self.click(opener.ref)).get("ok"):
+                    return None
+                clicked += 1
+                continue
+            if time.monotonic() >= deadline:
                 return None
-        return None
+            await asyncio.sleep(1.0)
 
     async def back(self) -> dict[str, Any]:
         page = await self._provider.page()
