@@ -6,6 +6,7 @@ Orden de estrategias (la más barata primero): 1) plantilla ya aprendida, 2) des
 
 from __future__ import annotations
 
+import logging
 import re
 import webbrowser
 from collections.abc import Callable, Sequence
@@ -15,12 +16,18 @@ from urllib.parse import quote_plus, urlsplit
 import httpx
 
 from hands.apps.models import normalize
+from hands.browser.service import BrowserService
 from hands.web.fetch import Fetcher, FetchResult
 from hands.web.opensearch import PLACEHOLDER
 from hands.web.store import TemplateStore
 from hands.web.strategies import BrowserSearchStrategy, OpenSearchStrategy, SearchStrategy
 
 Opener = Callable[[str], None]
+
+log = logging.getLogger("hands.web")
+DIOGENES_BROWSER = "navegador de Diogenes"
+SYSTEM_BROWSER = "navegador del sistema"
+STRATEGY_LABELS = {"aprendida": "plantilla aprendida", "opensearch": "OpenSearch", "navegador": "navegador"}
 
 # Para un nombre sin dominio ("youtube") se prueban dominios habituales; no hay ninguna web escrita a mano.
 TLDS = ("com", "es", "org", "net", "tv", "io")
@@ -67,10 +74,12 @@ class WebService:
         fetch: Fetcher,
         opener: Opener = open_in_browser,
         strategies: Sequence[SearchStrategy] | None = None,
+        browser: BrowserService | None = None,
     ) -> None:
         self._store = store
         self._fetch = fetch
         self._open = opener
+        self._browser = browser
         self._strategies = (
             list(strategies)
             if strategies is not None
@@ -80,11 +89,33 @@ class WebService:
             ]
         )
 
+    async def _show(self, url: str) -> str:
+        """Abre la URL en el Chrome de Diogenes (para poder seguir con browser.*) y, si no se puede, en el del sistema."""
+        if self._browser is not None:
+            try:
+                if (await self._browser.open(url)).get("ok"):
+                    return DIOGENES_BROWSER
+            except Exception:
+                log.warning("no se pudo usar el navegador de Diogenes; se usa el del sistema", exc_info=True)
+        self._open(url)
+        return SYSTEM_BROWSER
+
     async def open(self, url: str) -> dict[str, Any]:
         if not _is_http_url(url):
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
-        self._open(url)
-        return {"ok": True, "mensaje": f"Abierto {url}", "url": url}
+        where = await self._show(url)
+        return {"ok": True, "mensaje": f"Abierto {url} en el {where}", "url": url, "abierto_en": where}
+
+    def _found(self, site: str, url: str, origin: str, where: str) -> dict[str, Any]:
+        label = STRATEGY_LABELS.get(origin, origin)
+        return {
+            "ok": True,
+            "mensaje": f"Resultados de {site} abiertos en el {where} (estrategia: {label})",
+            "url": url,
+            "origen": origin,
+            "estrategia": label,
+            "abierto_en": where,
+        }
 
     async def site_search(self, site: str, query: str) -> dict[str, Any]:
         key = _site_key(site)
@@ -94,14 +125,9 @@ class WebService:
         learned = self._store.get(key)
         if learned is not None:
             url = self._build_url(learned.template, query)
-            self._open(url)
+            where = await self._show(url)
             self._store.record_success(key)
-            return {
-                "ok": True,
-                "mensaje": f"Resultados de {site} abiertos en el navegador (plantilla aprendida)",
-                "url": url,
-                "origen": "aprendida",
-            }
+            return self._found(site, url, "aprendida", where)
 
         page = await self._home(site)
         if page is None:
@@ -117,14 +143,7 @@ class WebService:
             if not await self._works(url):
                 continue
             self._store.save(key, page.url, template, strategy.name)
-            if not getattr(strategy, "shows_results", False):  # el navegador de Diogenes ya los muestra
-                self._open(url)
-            return {
-                "ok": True,
-                "mensaje": f"Resultados de {site} abiertos en el navegador ({strategy.name})",
-                "url": url,
-                "origen": strategy.name,
-            }
+            return self._found(site, url, strategy.name, await self._show(url))
 
         return {
             "ok": False,

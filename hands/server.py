@@ -241,7 +241,10 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
     )
     browser = BrowserService(session)
     web = WebService(
-        TemplateStore(db_path), fetcher, strategies=[OpenSearchStrategy(fetcher), BrowserSearchStrategy(browser)]
+        TemplateStore(db_path),
+        fetcher,
+        strategies=[OpenSearchStrategy(fetcher), BrowserSearchStrategy(browser)],
+        browser=browser,
     )
     server = build_server(index, actions=actions, web=web, browser=browser)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")

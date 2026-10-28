@@ -13,7 +13,7 @@ from hands.web.service import WebService
 from hands.web.store import TemplateStore
 from hands.web.strategies import PROBE, BrowserSearchStrategy, template_from_url
 from tests.test_browser import Provider
-from tests.test_web import FakeWeb
+from tests.test_web import FakeWeb, youtube_web
 
 RULES = BrowserRules.load()
 HOME = '- banner:\n  - searchbox "Buscar en Ejemplo" [ref=e1]\n  - link "Inicio" [ref=e2]'
@@ -95,12 +95,11 @@ def test_template_from_url(url: str, esperada: str | None) -> None:
 # --- estrategia ----------------------------------------------------------------------------------------
 
 
-async def test_descubre_la_plantilla_y_deja_el_navegador_en_los_resultados_reales() -> None:
+async def test_descubre_la_plantilla_buscando_la_consulta_de_prueba_y_no_la_real() -> None:
     site = FakeSite()
     template = await estrategia(site).discover(HOME_PAGE, "diogenes de sinope")
     assert template == "https://www.ejemplo.com/buscar?q={query}"
-    assert site.typed == [PROBE]  # se busca la consulta de prueba, no la real
-    assert site.visited[-1] == "https://www.ejemplo.com/buscar?q=diogenes+de+sinope"
+    assert site.typed == [PROBE]
 
 
 async def test_buscador_tras_un_icono() -> None:
@@ -126,7 +125,15 @@ async def test_sin_navegador_no_descubre_nada() -> None:
 # --- integración con WebService ------------------------------------------------------------------------
 
 
-async def test_site_search_sin_opensearch_usa_el_navegador_guarda_y_no_abre_en_el_del_sistema() -> None:
+def servicio_web(
+    site: FakeSite, web: FakeWeb, abiertas: list[str], *, con_navegador: bool = True
+) -> tuple[WebService, TemplateStore]:
+    store = TemplateStore(":memory:")
+    browser = BrowserService(Provider(site), RULES) if con_navegador else None  # type: ignore[arg-type]
+    return WebService(store, web, opener=abiertas.append, strategies=[estrategia(site)], browser=browser), store
+
+
+async def test_site_search_sin_opensearch_usa_el_navegador_guarda_y_abre_en_el_de_diogenes() -> None:
     site = FakeSite()
     abiertas: list[str] = []
     web = FakeWeb(
@@ -135,21 +142,82 @@ async def test_site_search_sin_opensearch_usa_el_navegador_guarda_y_no_abre_en_e
             "https://www.ejemplo.com/buscar?q=diogenes+de+sinope": (200, "<html>resultados</html>"),
         }
     )
-    store = TemplateStore(":memory:")
-    service = WebService(store, web, opener=abiertas.append, strategies=[estrategia(site)])
+    service, store = servicio_web(site, web, abiertas)
 
     r = await service.site_search("www.ejemplo.com", "diogenes de sinope")
 
     assert r["ok"] is True and r["origen"] == "navegador"
-    assert abiertas == []  # los resultados ya están en el navegador de Diogenes
+    assert (r["estrategia"], r["abierto_en"]) == ("navegador", "navegador de Diogenes")
+    assert "estrategia: navegador" in r["mensaje"] and "navegador de Diogenes" in r["mensaje"]
+    assert abiertas == []
+    assert site.visited[-1] == "https://www.ejemplo.com/buscar?q=diogenes+de+sinope"
     learned = store.get("ejemplo.com")
     assert learned is not None and learned.template == "https://www.ejemplo.com/buscar?q={query}"
 
-    # la segunda vez no se necesita el navegador: plantilla aprendida
-    site.visited.clear()
+    # la segunda vez no se necesita descubrir nada: plantilla aprendida, también en el Chrome de Diogenes
+    site.typed.clear()
     r2 = await service.site_search("www.ejemplo.com", "mochis")
-    assert r2["origen"] == "aprendida" and site.visited == []
-    assert abiertas == ["https://www.ejemplo.com/buscar?q=mochis"]
+    assert (r2["origen"], r2["estrategia"], r2["abierto_en"]) == (
+        "aprendida",
+        "plantilla aprendida",
+        "navegador de Diogenes",
+    )
+    assert site.typed == [] and site.visited[-1] == "https://www.ejemplo.com/buscar?q=mochis"
+    assert abiertas == []
+
+
+async def test_cualquier_estrategia_abre_en_el_chrome_de_diogenes_tambien_opensearch() -> None:
+    site = FakeSite()
+    abiertas: list[str] = []
+    web = youtube_web()
+    store = TemplateStore(":memory:")
+    browser = BrowserService(Provider(site), RULES)  # type: ignore[arg-type]
+    service = WebService(store, web, opener=abiertas.append, browser=browser)
+    r = await service.site_search("youtube", "cómo hacer mochis")
+    assert (r["estrategia"], r["abierto_en"]) == ("OpenSearch", "navegador de Diogenes")
+    assert abiertas == [] and site.visited[-1].startswith("https://www.youtube.com/results?")
+
+
+async def test_sin_chrome_de_diogenes_se_usa_el_del_sistema() -> None:
+    site = FakeSite()
+    abiertas: list[str] = []
+    web = FakeWeb({"https://www.ejemplo.com": (200, "<html></html>"), "https://www.ejemplo.com/buscar?q=a": (200, "")})
+    service, _ = servicio_web(site, web, abiertas, con_navegador=False)
+    service._strategies = []  # type: ignore[attr-defined]
+    service._store.save("ejemplo.com", "https://www.ejemplo.com", "https://www.ejemplo.com/buscar?q={query}", "x")  # type: ignore[attr-defined]
+    r = await service.site_search("www.ejemplo.com", "a")
+    assert r["abierto_en"] == "navegador del sistema" and abiertas == ["https://www.ejemplo.com/buscar?q=a"]
+
+
+async def test_si_el_chrome_de_diogenes_falla_al_abrir_cae_al_del_sistema() -> None:
+    class Roto:
+        async def page(self) -> FakeSite:
+            raise RuntimeError("No encuentro Chrome ni Edge instalados.")
+
+    abiertas: list[str] = []
+    service = WebService(
+        TemplateStore(":memory:"), FakeWeb({}), opener=abiertas.append, browser=BrowserService(Roto(), RULES)
+    )  # type: ignore[arg-type]
+    r = await service.open("https://example.com/")
+    assert r["ok"] is True and r["abierto_en"] == "navegador del sistema" and abiertas == ["https://example.com/"]
+
+
+async def test_web_open_usa_el_chrome_de_diogenes() -> None:
+    site = FakeSite()
+    abiertas: list[str] = []
+    service, _ = servicio_web(site, FakeWeb({}), abiertas)
+    r = await service.open("https://example.com/")
+    assert r["abierto_en"] == "navegador de Diogenes" and site.visited == ["https://example.com/"] and abiertas == []
+
+
+def test_el_cli_muestra_estrategia_y_navegador() -> None:
+    from core.__main__ import format_step
+    from core.agent import Step
+
+    res = '{"ok": true, "estrategia": "OpenSearch", "abierto_en": "navegador de Diogenes"}'
+    linea = format_step(Step("web.site_search", {"sitio": "wikipedia"}, res, True))
+    assert linea.endswith("→ OpenSearch · navegador de Diogenes")
+    assert format_step(Step("apps.launch", {"id": "x"}, '{"ok": true}', True)) == "  ✓ apps.launch(id='x')"
 
 
 async def test_si_el_navegador_no_encuentra_nada_el_error_lo_explica() -> None:

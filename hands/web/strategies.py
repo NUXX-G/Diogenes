@@ -57,14 +57,13 @@ def template_from_url(url: str, probe: str = PROBE) -> str | None:
 
 class BrowserSearchStrategy:
     """Escalón 3 → 4: abre la web en el navegador de Diogenes, localiza el buscador en el árbol de accesibilidad, escribe
-    una consulta de prueba con Enter y deduce la plantilla de la URL resultante. Después navega a los resultados de la
-    consulta real, así que el navegador de Diogenes ya los muestra (`shows_results`).
+    una consulta de prueba con Enter y deduce la plantilla de la URL resultante. Los resultados reales los abre
+    `WebService` (en el mismo navegador de Diogenes).
 
     Genérica: no sabe nada de ninguna web. Si la web busca sin cambiar la URL, no hay plantilla y no descubre nada.
     """
 
     name = "navegador"
-    shows_results = True
 
     def __init__(self, browser: BrowserService | None = None, wait_seconds: float = 4.0) -> None:
         self._browser = browser
@@ -91,5 +90,4 @@ class BrowserSearchStrategy:
         template = template_from_url(url)
         if template is None:
             return None
-        await browser.open(template.replace(opensearch.PLACEHOLDER, quote_plus(query)))
         return template
