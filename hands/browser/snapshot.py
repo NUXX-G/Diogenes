@@ -119,18 +119,48 @@ def _href(href: str) -> str:
     return "" if not href or href.startswith(("javascript:", "#")) else f" -> {_short(href, 70)}"
 
 
-def compact(yaml_text: str, *, url: str = "", title: str = "") -> str:
+MAX_FRESH = 20
+FRESH_HEADER = "NUEVO tras tu acción (menús, opciones, diálogos o avisos que acaban de aparecer):"
+
+
+def _line(node: Node) -> str:
+    label = f'{node.role} "{_readable_name(node.name)}"' if node.name else node.role
+    line = f"[{node.ref}] {label}{_href(node.href)}" if node.ref else f"  # {label}"
+    return line + ("  (CAMPO SENSIBLE: no lo rellenes)" if node.sensitive else "")
+
+
+def signature(node: Node) -> tuple[str, str]:
+    return node.role, node.name
+
+
+def compact(
+    yaml_text: str,
+    *,
+    url: str = "",
+    title: str = "",
+    previous: frozenset[tuple[str, str]] | None = None,
+) -> str:
+    """`previous`: (rol, nombre) de la página anterior en la misma URL. Lo que no estaba va primero, en su sección:
+    los menús desplegables y los avisos se pintan al final del árbol y el tope de elementos los cortaría."""
     nodes = parse(yaml_text)
+    fresh = (
+        [n for n in nodes if n.ref and signature(n) not in previous and n.role != "heading"][:MAX_FRESH]
+        if previous is not None
+        else []
+    )
+    fresh_refs = {n.ref for n in fresh}
+    nodes = [n for n in nodes if n.ref not in fresh_refs or not n.ref]
     out = [HEADER, f"url: {url}", f"título: {_short(title, MAX_NAME)}"]
+    if fresh:
+        out.append(FRESH_HEADER)
+        out += [_line(n) for n in fresh]
+        out.append("Resto de la página:")
     used = sum(len(line) + 1 for line in out)
     shown = 0
     for node in nodes:
         if shown >= MAX_NODES:
             break
-        label = f'{node.role} "{_readable_name(node.name)}"' if node.name else node.role
-        line = f"[{node.ref}] {label}{_href(node.href)}" if node.ref else f"  # {label}"
-        if node.sensitive:
-            line += "  (CAMPO SENSIBLE: no lo rellenes)"
+        line = _line(node)
         if used + len(line) + 1 > MAX_CHARS:
             break
         out.append(line)

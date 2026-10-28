@@ -39,7 +39,8 @@ abrir el elemento) hasta llegar a lo pedido, y no digas que has terminado antes.
 - Para moverte DENTRO de una web (abrir un canal, una pestaña, ordenar, abrir un resultado): browser_open con la \
 URL; devuelve la página con sus elementos y un ref (e12) cada uno. Haz UNA acción por respuesta (browser_click o \
 browser_type con un ref de la última página que viste); cada acción devuelve la página nueva y si cambió (url_cambio, \
-cambio_visible), así que no hace falta otro snapshot salvo para refrescarla. Nunca inventes refs ni encadenes varias \
+cambio_visible), así que no hace falta otro snapshot salvo para refrescarla. Si pulsas algo que despliega un menú o \
+abre un aviso, sus opciones salen primero, en NUEVO: elige una de ellas en vez de volver a pulsar el mismo botón. Nunca inventes refs ni encadenes varias \
 acciones del navegador en la misma respuesta. Para buscar usa el campo de búsqueda con enter=true.
 - Nunca digas que algo se ha enviado, publicado o hecho si el último resultado no lo demuestra: tras un clic o \
 un browser_type comprueba url_cambio o cambio_visible (o haz browser_snapshot). Escribir en un campo NO es enviar. Si \

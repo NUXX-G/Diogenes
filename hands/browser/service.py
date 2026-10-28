@@ -88,6 +88,8 @@ class BrowserService:
         # Huella de la última página devuelta. NO se vuelve a leer antes de actuar: cada aria_snapshot renumera los
         # refs y el que el modelo acaba de ver dejaría de valer.
         self._digest: str | None = None
+        self._signatures: frozenset[tuple[str, str]] = frozenset()  # (rol, nombre) de la última página
+        self._last_url = ""
 
     async def _state(self, page: BrowserPage) -> dict[str, Any]:
         url, title = await page.current()
@@ -101,11 +103,14 @@ class BrowserService:
         if text is None:
             self._nodes = {}
             return {**state, "cambio_visible": None}
+        previous = self._signatures if state["url"] == self._last_url else None
         self._nodes = {n.ref: n for n in snapshot.parse(text) if n.ref}
+        self._signatures = frozenset(snapshot.signature(n) for n in self._nodes.values())
+        self._last_url = state["url"]
         return {
             **state,
             "cambio_visible": _changed(before, _digest(text)),
-            "pagina": snapshot.compact(text, url=state["url"], title=state["titulo"]),
+            "pagina": snapshot.compact(text, url=state["url"], title=state["titulo"], previous=previous),
         }
 
     async def open(self, url: str) -> dict[str, Any]:

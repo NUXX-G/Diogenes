@@ -146,3 +146,40 @@ async def test_otras_estrategias_siguen_verificando_por_http() -> None:
     web = FakeWeb({"https://www.ejemplo.com": (200, "<html></html>")})  # la URL de resultados no responde
     service = WebService(TemplateStore(":memory:"), web, opener=lambda _u: None, strategies=[Dudosa()])
     assert (await service.site_search("www.ejemplo.com", "x"))["ok"] is False
+
+
+# --- lo nuevo tras una acción va primero (menús y avisos se pintan al final del árbol) ------------------------
+
+
+def pagina_larga(extra: str = "") -> str:
+    productos = "\n".join(f'- link "Producto número {i} {i},99€" [ref=e{i + 10}]' for i in range(200))
+    return f'- main:\n  - button "Ordenar" [ref=e1]\n{productos}\n{extra}'
+
+
+MENU = '- menu:\n  - menuitem "Precio: de menor a mayor" [ref=e900]\n  - menuitem "Relevancia" [ref=e901]'
+
+
+async def test_las_opciones_de_un_menu_desplegado_salen_primero_aunque_esten_al_final_del_arbol() -> None:
+    page = FakePage(pagina_larga(), navigates=False, on_click={"e1": pagina_larga(MENU)})
+    svc = BrowserService(Provider(page), RULES)
+    abierta = await svc.snapshot()
+    assert "Precio: de menor a mayor" not in abierta["pagina"]  # no cabe entre los 70 primeros
+    res = await svc.click("e1")
+    texto = res["pagina"]
+    assert snapshot.FRESH_HEADER in texto
+    assert texto.index("Precio: de menor a mayor") < texto.index("Producto número 0")
+    assert (await svc.click("e900"))["ok"] is True  # y su ref es utilizable sin otro snapshot
+
+
+async def test_si_no_aparece_nada_nuevo_no_hay_seccion_nuevo() -> None:
+    page = FakePage(pagina_larga(), navigates=False)
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    assert snapshot.FRESH_HEADER not in (await svc.click("e1"))["pagina"]
+
+
+async def test_al_cambiar_de_url_no_se_marca_nada_como_nuevo() -> None:
+    page = FakePage(pagina_larga(), navigates=True, on_click={"e1": pagina_larga(MENU)})
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    assert snapshot.FRESH_HEADER not in (await svc.click("e1"))["pagina"]
