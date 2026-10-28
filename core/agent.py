@@ -35,6 +35,7 @@ adjetivos de la orden como "más visto", "más barato" o "último". Si la petici
 (abrir el más visto de un canal, el más barato, un dato concreto), la búsqueda es solo el primer paso: sigue con \
 browser_click, browser_type y las demás herramientas del navegador (entrar en el canal o la ficha, ordenar o filtrar, \
 abrir el elemento) hasta llegar a lo pedido, y no digas que has terminado antes.
+- Para "el más visto / más barato / más reciente / mejor valorado": un elemento NO es "el más X" por salir primero en una lista sin ordenar. Busca en la página la lista completa (una pestaña como Vídeos o Productos) y un control de ordenar o filtrar (pestañas, chips o botones como "Populares", "Ordenar por", "Precio", "Más recientes") y púlsalo; después abre el primero de la lista ya ordenada. Si no existe ese control, dilo en vez de adivinar. Di que has abierto algo solo si la url devuelta es la de ese elemento.
 - Para moverte DENTRO de una web (abrir un canal, una pestaña, ordenar, abrir un resultado): browser_open con la \
 URL; devuelve la página con sus elementos y un ref (e12) cada uno. Haz UNA acción por respuesta (browser_click o \
 browser_type con un ref de la última página que viste); cada acción devuelve la página nueva y si cambió (url_cambio, \

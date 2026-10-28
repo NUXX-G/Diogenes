@@ -236,3 +236,20 @@ async def test_refs_raros_no_rompen(ref: str) -> None:
     svc, _ = servicio()
     await svc.snapshot()
     assert (await svc.click(ref))["ok"] in (True, False)
+
+
+def test_compact_quita_enlaces_sin_nombre_y_encabezados_repetidos() -> None:
+    aria = """\
+- link [ref=e1]:
+  - /url: /watch?v=1
+- heading "Mi vídeo 12 minutos" [level=3] [ref=e2]
+- link "Mi vídeo 12 minutos" [ref=e3]:
+  - /url: /watch?v=1
+- textbox [ref=e4]
+- heading "Otra sección" [level=2] [ref=e5]
+"""
+    out = snapshot.compact(aria)
+    assert "[e1]" not in out and "[e2]" not in out  # enlace anónimo y encabezado que repite al siguiente
+    assert '[e3] link "Mi vídeo 12 minutos"' in out
+    assert "[e4] textbox" in out  # un campo sin nombre sí puede ser el buscador
+    assert "Otra sección" in out

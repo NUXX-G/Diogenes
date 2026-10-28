@@ -72,13 +72,26 @@ def parse(yaml_text: str) -> list[Node]:
         if ref is None and role not in LANDMARKS:
             continue
         name = (match["name"] or "").replace('\\"', '"')
+        if not name and role in INTERACTIVE and role not in TEXT_INPUTS:
+            continue  # sin nombre no se sabe qué es: solo ocupa sitio (suele duplicar a un enlace con nombre)
         node = Node(ref["ref"] if ref else "", role, name)
         if nodes and (nodes[-1].role, nodes[-1].name) == (role, name) and role not in TEXT_INPUTS:
             last_with_ref = None
             continue
         nodes.append(node)
         last_with_ref = len(nodes) - 1 if ref else None
-    return nodes
+    return _without_echoed_headings(nodes)
+
+
+def _without_echoed_headings(nodes: list[Node]) -> list[Node]:
+    """Un encabezado cuyo texto repite el del enlace que le sigue (tarjetas de listas) no aporta nada."""
+    kept: list[Node] = []
+    for i, node in enumerate(nodes):
+        nxt = nodes[i + 1] if i + 1 < len(nodes) else None
+        if node.role == "heading" and nxt is not None and node.name and nxt.name.startswith(node.name[:30]):
+            continue
+        kept.append(node)
+    return kept
 
 
 def _href(href: str) -> str:
