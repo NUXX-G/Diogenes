@@ -31,6 +31,7 @@ from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
 from hands.web.store import TemplateStore
+from hands.web.strategies import BrowserSearchStrategy, OpenSearchStrategy
 
 log = logging.getLogger("hands")
 
@@ -233,13 +234,16 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
     index.replace(await asyncio.to_thread(discovery.discover))
     log.info("índice de apps: %d entradas", len(index))
     fetcher = HttpFetcher()
-    web = WebService(TemplateStore(db_path), fetcher)
     session = BrowserSession(
         preferred=os.environ.get("DIOGENES_BROWSER", "chrome"),
         profile=Path(os.environ.get("DIOGENES_BROWSER_PROFILE", str(DEFAULT_PROFILE))),
         port=int(os.environ.get("DIOGENES_BROWSER_PORT", str(DEFAULT_PORT))),
     )
-    server = build_server(index, actions=actions, web=web, browser=BrowserService(session))
+    browser = BrowserService(session)
+    web = WebService(
+        TemplateStore(db_path), fetcher, strategies=[OpenSearchStrategy(fetcher), BrowserSearchStrategy(browser)]
+    )
+    server = build_server(index, actions=actions, web=web, browser=browser)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index))
     try:

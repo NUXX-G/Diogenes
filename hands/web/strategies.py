@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Protocol
+from urllib.parse import quote, quote_plus
 
 import httpx
 
+from hands.browser.service import BrowserService
 from hands.web import opensearch
 from hands.web.fetch import Fetcher, FetchResult
 
@@ -37,15 +41,55 @@ class OpenSearchStrategy:
         return opensearch.template_from_descriptor(descriptor.text)
 
 
-class BrowserSearchStrategy:
-    """Hueco para la fase 6: abrir la web con Playwright, localizar el campo de búsqueda, escribir `probe_query`,
-    pulsar Enter y deducir la plantilla de la URL resultante sustituyendo la consulta por `{query}`.
+# Dos palabras sin sentido: no coinciden con ningún artículo ni redirigen, y comprueban cómo se codifica el espacio.
+PROBE = "qzxv wdrk"
+_ENCODINGS = (lambda q: quote_plus(q), lambda q: quote(q, safe=""), lambda q: q.replace(" ", "_"), lambda q: q)
 
-    Hasta que exista el escalón del navegador no descubre nada; está registrada para que el orden de estrategias
-    (aprendida → OpenSearch → navegador) y el mensaje de error ya sean los definitivos.
+
+def template_from_url(url: str, probe: str = PROBE) -> str | None:
+    """La URL de resultados con la consulta de prueba sustituida por `{query}`, o None si la consulta no aparece."""
+    for encode in _ENCODINGS:
+        encoded = encode(probe)
+        if encoded in url:
+            return url.replace(encoded, opensearch.PLACEHOLDER, 1)
+    return None
+
+
+class BrowserSearchStrategy:
+    """Escalón 3 → 4: abre la web en el navegador de Diogenes, localiza el buscador en el árbol de accesibilidad, escribe
+    una consulta de prueba con Enter y deduce la plantilla de la URL resultante. Después navega a los resultados de la
+    consulta real, así que el navegador de Diogenes ya los muestra (`shows_results`).
+
+    Genérica: no sabe nada de ninguna web. Si la web busca sin cambiar la URL, no hay plantilla y no descubre nada.
     """
 
     name = "navegador"
+    shows_results = True
 
-    async def discover(self, page: FetchResult, probe_query: str) -> str | None:
-        return None
+    def __init__(self, browser: BrowserService | None = None, wait_seconds: float = 4.0) -> None:
+        self._browser = browser
+        self._wait = wait_seconds
+
+    async def discover(self, page: FetchResult, query: str) -> str | None:
+        browser = self._browser
+        if browser is None or not (await browser.open(page.url)).get("ok"):
+            return None
+        ref = await browser.find_search_field()
+        if ref is None:
+            return None
+        start = (await browser.current())["url"]
+        typed = await browser.type(ref, PROBE, True)
+        if not typed.get("ok"):
+            return None
+        url = typed["url"]
+        deadline = time.monotonic() + self._wait
+        while url == start and time.monotonic() < deadline:  # búsquedas que actualizan la URL con retraso
+            await asyncio.sleep(0.3)
+            url = (await browser.current())["url"]
+        if url == start:
+            return None
+        template = template_from_url(url)
+        if template is None:
+            return None
+        await browser.open(template.replace(opensearch.PLACEHOLDER, quote_plus(query)))
+        return template

@@ -1,7 +1,7 @@
 """web.open y web.site_search: abrir una URL y buscar dentro de cualquier web, descubriendo cómo busca.
 
 Orden de estrategias (la más barata primero): 1) plantilla ya aprendida, 2) descriptor OpenSearch de la web,
-3) automatización con navegador (hueco para la fase 6). La plantilla que funciona se guarda en SQLite.
+3) automatización con el navegador de Diogenes (browser.*). La plantilla que funciona se guarda en SQLite.
 """
 
 from __future__ import annotations
@@ -117,7 +117,8 @@ class WebService:
             if not await self._works(url):
                 continue
             self._store.save(key, page.url, template, strategy.name)
-            self._open(url)
+            if not getattr(strategy, "shows_results", False):  # el navegador de Diogenes ya los muestra
+                self._open(url)
             return {
                 "ok": True,
                 "mensaje": f"Resultados de {site} abiertos en el navegador ({strategy.name})",
@@ -128,7 +129,7 @@ class WebService:
         return {
             "ok": False,
             "mensaje": f"No he descubierto cómo se busca en {site} (probado: {', '.join(intentadas)}). "
-            "La automatización con navegador aún no está disponible.",
+            "Si la web está abierta en el navegador de Diogenes, puedes pedirme que use su buscador paso a paso.",
         }
 
     @staticmethod

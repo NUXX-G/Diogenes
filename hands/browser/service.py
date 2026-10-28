@@ -182,6 +182,33 @@ class BrowserService:
             **state,
         }
 
+    def _search_field(self) -> snapshot.Node | None:
+        fields = [
+            n
+            for n in self._nodes.values()
+            if n.role in snapshot.TEXT_INPUTS and not n.sensitive and self._rules.is_search_field(n.role, n.name)
+        ]
+        return next((n for n in fields if n.role == "searchbox"), fields[0] if fields else None)
+
+    async def find_search_field(self) -> str | None:
+        """Ref del buscador de la página actual. Si solo hay un botón o icono de búsqueda, lo pulsa y vuelve a mirar."""
+        for _ in range(2):
+            await self.snapshot()
+            field = self._search_field()
+            if field is not None:
+                return field.ref
+            opener = next(
+                (
+                    n
+                    for n in self._nodes.values()
+                    if n.role in {"button", "link"} and self._rules.is_search_field(n.role, n.name)
+                ),
+                None,
+            )
+            if opener is None or not (await self.click(opener.ref)).get("ok"):
+                return None
+        return None
+
     async def back(self) -> dict[str, Any]:
         page = await self._provider.page()
         await page.back()
