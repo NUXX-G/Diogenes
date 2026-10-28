@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
@@ -160,4 +159,6 @@ def test_el_prompt_lleva_las_reglas(frase: str) -> None:
     assert frase.replace("\\", "") in SYSTEM_PROMPT.replace("\\\n", "")
 
 
-_: Any = None
+def test_dos_citas_con_comillas_rectas_no_se_emparejan_entre_si() -> None:
+    respuesta = 'No hay opción de "más visto" en la página. Abrí "Palit GeForce RTX 5060 Ti Dual 8GB GDDR7" sin más.'
+    assert _grounded(respuesta, [paso_pagina(PAGINA)]) == respuesta

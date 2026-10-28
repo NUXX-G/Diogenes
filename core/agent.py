@@ -259,7 +259,8 @@ def _unbacked_answer(keys: list[str], steps: list[Step]) -> str:
     )
 
 
-_QUOTED = re.compile(r"«([^»]{12,})»|\"([^\"]{12,})\"|“([^”]{12,})”|\(([^()]{20,})\)")
+# las comillas rectas solo abren tras un espacio o signo y cierran antes de uno: `"a" b "c"` no empareja el cierre de «a»
+_QUOTED = re.compile(r'«([^»]{12,})»|(?<!\w)"([^"]{12,})"(?!\w)|“([^”]{12,})”|\(([^()]{20,})\)')
 
 
 _QUOTE_CHARS = str.maketrans("", "", '«»"“”')
