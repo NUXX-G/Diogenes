@@ -427,3 +427,42 @@ async def test_solo_la_primera_accion_del_navegador_por_respuesta_se_ejecuta() -
     resultado, page, _ = await ejecutar_con(llm, FakePage(INYECCION), aprobar())
     assert [s.tool for s in resultado.steps] == ["browser.snapshot", "browser.click"]
     assert clics(page) == [("click", "e3")]
+
+
+# --- los refs de Playwright mueren con cada aria_snapshot nuevo ---------------------------------------
+
+
+class StrictRefsPage(FakePage):
+    """Como Playwright: cada lectura del árbol renumera los refs y solo valen los de la última lectura."""
+
+    def __init__(self) -> None:
+        super().__init__(navigates=False)
+        self.generation = 0
+
+    async def aria(self) -> str:
+        self.generation += 1
+        g = self.generation
+        lineas = [
+            "- main:",
+            f'  - textbox "Buscar" [ref=g{g}e1]',
+            f'  - link "Vídeos" [ref=g{g}e2]',
+            f"  - paragraph: lectura {g}",
+        ]
+        return "\n".join(lineas)
+
+    async def click(self, ref: str) -> None:
+        if not ref.startswith(f"g{self.generation}"):
+            raise TimeoutError(f"ref caducado: {ref}")
+        self.calls.append(("click", ref))
+
+
+async def test_actuar_no_lee_la_pagina_antes_porque_renumera_los_refs() -> None:
+    page = StrictRefsPage()
+    svc = BrowserService(Provider(page), RULES)
+    snap = await svc.snapshot()
+    ref = snap["pagina"].split("[")[3].split("]")[0]  # el ref de «Vídeos» tal y como lo vio el modelo
+    res = await svc.click(ref)
+    assert res["ok"] is True, res["mensaje"]
+    assert res["cambio_visible"] is True  # la lectura posterior difiere de la que vio el modelo
+    nuevo = res["pagina"].split("[")[3].split("]")[0]
+    assert nuevo != ref and (await svc.click(nuevo))["ok"] is True  # los refs devueltos tras actuar sí valen

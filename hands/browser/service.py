@@ -78,6 +78,9 @@ class BrowserService:
         self._rules = rules or BrowserRules.load()
         self._nodes: dict[str, snapshot.Node] = {}
         self._form_dirty = False  # Diogenes ha escrito en un campo que no es un buscador
+        # Huella de la última página devuelta. NO se vuelve a leer antes de actuar: cada aria_snapshot renumera los
+        # refs y el que el modelo acaba de ver dejaría de valer.
+        self._digest: str | None = None
 
     async def _state(self, page: BrowserPage) -> dict[str, Any]:
         url, title = await page.current()
@@ -87,6 +90,7 @@ class BrowserService:
         """Lee la página tras una acción: deja los refs vigentes y la devuelve ya compactada, para no gastar un snapshot."""
         text = await _read(page)
         state = await self._state(page)
+        self._digest = _digest(text)
         if text is None:
             self._nodes = {}
             return {**state, "cambio_visible": None}
@@ -130,7 +134,7 @@ class BrowserService:
                 return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
         page = await self._provider.page()
         before = (await page.current())[0]
-        seen_before = _digest(await _read(page))
+        seen_before = self._digest
         try:
             await page.click(ref)
         except Exception as exc:  # noqa: BLE001
@@ -163,7 +167,7 @@ class BrowserService:
         if enter and not is_search and not confirmado:
             return _confirmation("browser.type", ref, node.name, "envío de un formulario que no es un buscador")
         before = (await page.current())[0]
-        seen_before = _digest(await _read(page))
+        seen_before = self._digest
         try:
             await page.fill(ref, text, enter)
         except Exception as exc:  # noqa: BLE001

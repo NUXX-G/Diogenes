@@ -115,6 +115,10 @@ class WebService:
             "origen": origin,
             "estrategia": label,
             "abierto_en": where,
+            "siguiente": (
+                "Si la petición era solo buscar, has terminado. Si pedía algo más (abrir un resultado concreto, "
+                "ordenar, leer un dato), la página ya está abierta: sigue con browser_snapshot y browser_click."
+            ),
         }
 
     async def site_search(self, site: str, query: str) -> dict[str, Any]:
