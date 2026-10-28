@@ -2,7 +2,8 @@
 
 Esta es la defensa real contra una orden inyectada (en una web, un correo, un nombre de app): el modelo puede
 proponer cualquier herramienta, pero las de la lista no se ejecutan sin un "sí" humano. Si no hay forma de
-preguntar, la respuesta es no.
+preguntar, la respuesta es no. Las herramientas del navegador deciden por el elemento concreto (su nombre accesible
+y las reglas de `configuracion/confirmaciones.json`): devuelven `requiere_confirmacion` y el agente pregunta aquí.
 """
 
 from __future__ import annotations
@@ -34,7 +35,11 @@ class ConfirmationPolicy:
     def requires(self, tool: str) -> bool:
         return tool in self._tools
 
+    async def approve(self, tool: str, args: dict[str, Any], confirm: Confirm | None) -> bool:
+        """Pregunta siempre al humano. Sin forma de preguntar, la respuesta es no."""
+        return confirm is not None and await confirm(tool, args)
+
     async def allows(self, tool: str, args: dict[str, Any], confirm: Confirm | None) -> bool:
         if not self.requires(tool):
             return True
-        return confirm is not None and await confirm(tool, args)
+        return await self.approve(tool, args, confirm)
