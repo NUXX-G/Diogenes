@@ -7,7 +7,7 @@ Se comparan nombres accesibles sin acentos ni mayúsculas y por palabras complet
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +31,7 @@ class BrowserRules:
     payment: frozenset[str]
     search_fields: frozenset[str]
     minimal_notice: frozenset[str] = frozenset()
+    order_criteria: tuple[tuple[str, frozenset[str]], ...] = ()
 
     @classmethod
     def from_lists(
@@ -39,12 +40,14 @@ class BrowserRules:
         payment: Iterable[str],
         search: Iterable[str],
         minimal_notice: Iterable[str] = (),
+        order_criteria: Mapping[str, Iterable[str]] | None = None,
     ) -> BrowserRules:
         return cls(
             frozenset(normalize(t) for t in irreversible),
             frozenset(normalize(t) for t in payment),
             frozenset(normalize(t) for t in search),
             frozenset(normalize(t) for t in minimal_notice),
+            tuple((k, frozenset(normalize(t) for t in terms)) for k, terms in (order_criteria or {}).items()),
         )
 
     @classmethod
@@ -63,6 +66,7 @@ class BrowserRules:
             section["terminos_de_pago"],
             section["campos_de_busqueda"],
             section.get("avisos_minimos", []),
+            section.get("criterios_de_orden", {}),
         )
 
     def payment_term(self, role: str, name: str) -> str | None:
@@ -70,6 +74,12 @@ class BrowserRules:
 
     def irreversible_term(self, role: str, name: str) -> str | None:
         return _matches(name, self.irreversible) if role in ACTIONABLE else None
+
+    def order_criteria_of(self, role: str, name: str) -> list[str]:
+        """Criterios de orden que aplica pulsar este elemento ('barato', 'visto'...): una ordenación o filtro de la web."""
+        if role not in ACTIONABLE:
+            return []
+        return [key for key, terms in self.order_criteria if _matches(name, terms)]
 
     def minimal_notice_term(self, role: str, name: str) -> str | None:
         """Botón de un aviso (cookies, etc.) que lo cierra con lo mínimo: rechazar."""

@@ -29,6 +29,20 @@
       "add payment method", "add card"
     ],
     "campos_de_busqueda": ["buscar", "busqueda", "buscador", "search", "find"],
+    "criterios_de_orden": {
+      "visto": ["populares", "mas populares", "mas vistos", "mas visto", "mas visualizados", "most viewed", "popular videos"],
+      "barato": [
+        "precio mas bajo", "menor precio", "precio de menor a mayor", "de menor a mayor", "precio ascendente",
+        "mas baratos", "mas barato", "price low to high", "lowest price", "price ascending"
+      ],
+      "caro": [
+        "precio mas alto", "mayor precio", "precio de mayor a menor", "de mayor a menor", "precio descendente",
+        "mas caros", "price high to low", "highest price"
+      ],
+      "reciente": ["mas recientes", "mas reciente", "subidas recientes", "novedades", "newest", "latest", "recently added"],
+      "valorado": ["mejor valorados", "mejor valorado", "mejor puntuados", "mas valorados", "top rated", "highest rated", "best rated"],
+      "vendido": ["mas vendidos", "mas vendido", "best sellers", "best selling"]
+    },
     "avisos_minimos": [
       "rechazar todas", "rechazar todo", "rechazar", "solo necesarias", "solo las necesarias",
       "reject all", "reject", "decline all", "decline", "only necessary", "necessary only"

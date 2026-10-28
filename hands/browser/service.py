@@ -177,6 +177,8 @@ class BrowserService:
             + (f". Antes cerré un aviso que lo tapaba con «{closed}»" if closed else "")
             + ("" if seen["cambio_visible"] or moved else ". La página NO ha cambiado."),
             "url_cambio": moved,
+            "objetivo": node.name,
+            "criterio": self._rules.order_criteria_of(node.role, node.name),
             **seen,
         }
 
