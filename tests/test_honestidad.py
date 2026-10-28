@@ -259,3 +259,32 @@ def test_un_clic_que_no_cambia_de_url_mantiene_el_respaldo() -> None:
         ),
     ]
     assert _grounded("El más barato es X.", pasos) == "El más barato es X."
+
+
+# --- precios: lo que cita la respuesta tiene que haberse visto -------------------------------------------------
+
+
+def pagina_con_precios() -> Step:
+    return paso_pagina('[e1] link "Palit RTX 5060 Ti · 575,95€"\n[e2] link "Gigabyte AERO OC 1.019€"')
+
+
+def test_un_precio_visto_en_la_pagina_pasa() -> None:
+    respuesta = "La más barata cuesta 575,95 €, y la AERO 1.019 euros."
+    assert "Corrección" not in _grounded(respuesta, [pagina_con_precios(), orden_barato()])
+
+
+def test_un_precio_que_no_esta_en_ninguna_pagina_se_corrige_y_se_conserva_el_resto() -> None:
+    """Caso real: el modelo dijo 599,99 € cuando la primera costaba 575,95 €."""
+    respuesta = "El precio de la RTX 5060 más barata es de 599,99 €."
+    texto = _grounded(respuesta, [pagina_con_precios(), orden_barato()])
+    assert texto.startswith("Corrección: 599,99 € no aparece en ninguna página")
+    assert texto.endswith(respuesta)
+
+
+def test_sin_paginas_vistas_no_se_juzgan_precios() -> None:
+    assert _grounded("Cuesta 12 €.", []) == "Cuesta 12 €."
+
+
+def orden_barato() -> Step:
+    datos = {"ok": True, "url": LISTA + "&sort=price_asc", "titulo": "T", "url_cambio": True, "cambio_visible": True}
+    return Step("browser.click", {"ref": "e9"}, json.dumps({**datos, "criterio": ["barato"]}), True)
