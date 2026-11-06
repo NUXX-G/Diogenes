@@ -140,6 +140,11 @@ class BrowserSession:
         self._lock = asyncio.Lock()
 
     @property
+    def pid(self) -> int | None:
+        """PID del navegador que lanzó Diogenes, si sigue abierto (si no lo lanzó él, no es suyo y no se protege)."""
+        return self._proc.pid if self._proc is not None and self._proc.poll() is None else None
+
+    @property
     def _endpoint(self) -> str:
         return f"http://127.0.0.1:{self._port}"
 

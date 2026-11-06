@@ -3,12 +3,24 @@
     "files.delete",
     "files.move",
     "window.force_close",
+    "apps.force_close",
     "messages.send",
     "software.install",
     "software.uninstall",
     "shell.run",
     "settings.change"
   ],
+  "cierre": {
+    "confirmar_cierre_suave": true,
+    "espera_segundos": 4,
+    "procesos_protegidos": [
+      "python.exe", "pythonw.exe", "py.exe", "uv.exe", "ollama.exe", "ollama app.exe", "ollama_llama_server.exe",
+      "explorer.exe", "dwm.exe", "csrss.exe", "winlogon.exe", "wininit.exe", "services.exe", "lsass.exe",
+      "svchost.exe", "smss.exe", "taskmgr.exe", "searchhost.exe", "startmenuexperiencehost.exe",
+      "shellexperiencehost.exe", "applicationframehost.exe", "textinputhost.exe", "claude.exe",
+      "windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"
+    ]
+  },
   "intencion": {
     "verbos": {
       "abrir": ["abr*", "lanz*", "ejecut*", "inici*", "arranc*", "pon", "ponm*", "ponl*", "open", "launch", "start", "run", "play", "reproduc*", "juega*", "jugar", "quiero", "dame", "muestr*", "ensen*", "show"],
@@ -19,6 +31,7 @@
     "herramientas": {
       "apps.launch": {"verbos": ["abrir"], "objetivo": "app"},
       "apps.close": {"verbos": ["cerrar"], "objetivo": "app"},
+    "apps.force_close": {"verbos": ["cerrar"], "objetivo": "app"},
       "web.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "browser.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "web.site_search": {"verbos": ["buscar", "abrir", "navegar"], "objetivo": "sitio"}

@@ -28,6 +28,8 @@ from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry
 from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
+from hands.system.closer import AppCloser, CloseConfig
+from hands.system.windows import WinBackend
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
 from hands.web.store import TemplateStore
@@ -67,6 +69,7 @@ def build_server(
     actions: ActionLog | None = None,
     web: WebService | None = None,
     browser: BrowserService | None = None,
+    closer: AppCloser | None = None,
 ) -> MCPServer:
     server = MCPServer("hands-mcp")
 
@@ -133,6 +136,41 @@ def build_server(
             return {"ok": True, "mensaje": f"Lanzado {entry.name}"}
 
         return await audited("apps.launch", {"id": id}, run)
+
+    if closer is not None:
+
+        @server.tool(
+            name="apps.close",
+            description=(
+                "Cierra una aplicación abierta (id de apps.search) como con el botón X: si tiene cambios sin guardar, "
+                "la propia app pregunta. Si devuelve requiere_confirmacion, el usuario decide. Si la app sigue abierta "
+                "después, díselo al usuario; no la fuerces por tu cuenta."
+            ),
+        )
+        async def apps_close(id: str, confirmado: bool = False) -> dict[str, Any]:
+            async def run() -> dict[str, Any]:
+                entry = index.get(id)
+                if entry is None:
+                    return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
+                return await asyncio.to_thread(closer.close, entry, confirmado)
+
+            return await audited("apps.close", {"id": id, "confirmado": confirmado}, run)
+
+        @server.tool(
+            name="apps.force_close",
+            description=(
+                "Fuerza el cierre de una app que sigue abierta tras apps.close. Pierde los cambios sin guardar: "
+                "el usuario debe confirmarlo aparte. Solo funciona si antes se intentó apps.close con esa app."
+            ),
+        )
+        async def apps_force_close(id: str) -> dict[str, Any]:
+            async def run() -> dict[str, Any]:
+                entry = index.get(id)
+                if entry is None:
+                    return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
+                return await asyncio.to_thread(closer.force_close, entry)
+
+            return await audited("apps.force_close", {"id": id}, run)
 
     if web is not None:
 
@@ -230,6 +268,14 @@ async def _refresh_forever(index: AppIndex, every: float = REFRESH_SECONDS) -> N
             log.warning("no se pudo refrescar el índice de apps", exc_info=True)
 
 
+def _build_closer(session: BrowserSession) -> AppCloser:
+    def browser_pids() -> set[int]:
+        pid = session.pid  # el navegador de Diogenes no se cierra mientras esté abierto: puede haber una tarea en curso
+        return {pid} if pid else set()
+
+    return AppCloser(WinBackend(), CloseConfig.load(), protected_pids=browser_pids)
+
+
 async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_path: Path) -> None:
     index.replace(await asyncio.to_thread(discovery.discover))
     log.info("índice de apps: %d entradas", len(index))
@@ -246,7 +292,8 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
         strategies=[OpenSearchStrategy(fetcher), BrowserSearchStrategy(browser)],
         browser=browser,
     )
-    server = build_server(index, actions=actions, web=web, browser=browser)
+    closer = _build_closer(session) if sys.platform == "win32" else None
+    server = build_server(index, actions=actions, web=web, browser=browser, closer=closer)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index))
     try:
