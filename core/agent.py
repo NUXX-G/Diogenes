@@ -481,7 +481,7 @@ class Agent:
         """Lo que el usuario ha pedido de verdad en este turno: su mensaje, y si solo dice "sí" a una pregunta del agente,
         también lo que pidió antes y la pregunta a la que asiente (la vio y la aceptó). Nunca lo que dijo una herramienta."""
         if is_affirmation(request) and self._last_answer.rstrip(" »\"'").endswith("?"):
-            return "\n".join((self._last_user, self._last_answer, text))
+            return f"{self._last_user}\n{self._last_answer}\n{text}"
         return text
 
     def _apply_pending_choice(self, request: str) -> tuple[str, str]:
