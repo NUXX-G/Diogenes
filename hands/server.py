@@ -29,6 +29,7 @@ from hands.apps.models import AppEntry
 from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.system.closer import AppCloser, CloseConfig
+from hands.system.media import Media, WinKeySender
 from hands.system.windows import WinBackend
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
@@ -63,6 +64,10 @@ class TokenAuthMiddleware:
         await self._app(scope, receive, send)
 
 
+async def _call(fn: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
+    return await asyncio.to_thread(fn, *args)
+
+
 def build_server(
     index: AppIndex,
     launch: Callable[[AppEntry], None] = launcher.launch,
@@ -70,6 +75,7 @@ def build_server(
     web: WebService | None = None,
     browser: BrowserService | None = None,
     closer: AppCloser | None = None,
+    media: Media | None = None,
 ) -> MCPServer:
     server = MCPServer("hands-mcp")
 
@@ -136,6 +142,18 @@ def build_server(
             return {"ok": True, "mensaje": f"Lanzado {entry.name}"}
 
         return await audited("apps.launch", {"id": id}, run)
+
+    if media is not None:
+
+        @server.tool(
+            name="media.key",
+            description=(
+                "Pulsa una tecla multimedia: play_pausa, siguiente, anterior, parar, subir_volumen, bajar_volumen o "
+                "silencio. Actúa sobre lo que esté sonando; para elegir qué suena, abre la app o la web."
+            ),
+        )
+        async def media_key(tecla: str, veces: int = 1) -> dict[str, Any]:
+            return await audited("media.key", {"tecla": tecla, "veces": veces}, lambda: _call(media.key, tecla, veces))
 
     if closer is not None:
 
@@ -293,7 +311,8 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
         browser=browser,
     )
     closer = _build_closer(session) if sys.platform == "win32" else None
-    server = build_server(index, actions=actions, web=web, browser=browser, closer=closer)
+    media = Media(WinKeySender()) if sys.platform == "win32" else None
+    server = build_server(index, actions=actions, web=web, browser=browser, closer=closer, media=media)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index))
     try:
