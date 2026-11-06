@@ -2,7 +2,7 @@
 name = "diogenes"
 version = "0.1.0"
 description = "Asistente personal con IA local que controla el PC (modo personal)"
-requires-python = "==3.12.*"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "httpx==0.28.1",
     "httpx2==2.16.0",

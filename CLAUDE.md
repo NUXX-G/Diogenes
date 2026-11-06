@@ -120,7 +120,7 @@ Damos control amplio, pero con estas reglas que no se negocian:
 
 ## Stack
 
-- **Python 3.12**, gestionado con `uv`. Lint y formato con `ruff`. Tipado con anotaciones en todo.
+- **Python 3.12** (se admite también 3.13 y 3.14: en los PCs del centro la política de control de aplicaciones bloquea el `_sqlite3.pyd` del Python 3.12 que instala `uv`, y allí se usa el Python del sistema), gestionado con `uv`. Lint y formato con `ruff`. Tipado con anotaciones en todo.
 - **MCP**: SDK oficial de Python (`mcp`), transporte HTTP.
 - **Windows**: `pywinauto` / `uiautomation`, `pywin32`, `keyboard` o `pynput` para atajos globales.
 - **Navegador**: `playwright` conectado por CDP a un perfil dedicado.
