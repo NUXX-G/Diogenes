@@ -286,3 +286,8 @@ async def test_las_herramientas_de_cierre_solo_existen_si_hay_closer() -> None:
     async with Client(hands_server.build_server(AppIndex(), closer=closer(FakeWindows()))) as client:
         con = {t.name for t in (await client.list_tools()).tools}
     assert con - sin == {"apps.close", "apps.force_close"}
+
+
+def test_forzar_el_cierre_pide_confirmacion_aunque_el_json_del_usuario_no_lo_liste() -> None:
+    assert ConfirmationPolicy([]).requires("apps.force_close")
+    assert not ConfirmationPolicy([]).requires("apps.close")

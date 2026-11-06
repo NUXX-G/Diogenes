@@ -16,11 +16,13 @@ from typing import Any
 Confirm = Callable[[str, dict[str, Any]], Awaitable[bool]]
 
 CONFIG_DIR = Path("configuracion")
+# Siempre piden confirmación, aunque un confirmaciones.json antiguo o recortado no las liste.
+ALWAYS_CONFIRM = frozenset({"apps.force_close"})
 
 
 class ConfirmationPolicy:
     def __init__(self, tools: Iterable[str]) -> None:
-        self._tools = frozenset(tools)
+        self._tools = frozenset(tools) | ALWAYS_CONFIRM
 
     @classmethod
     def load(cls, directory: Path = CONFIG_DIR) -> ConfirmationPolicy:
