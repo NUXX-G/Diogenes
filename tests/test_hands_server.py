@@ -122,5 +122,7 @@ async def test_search_con_empate_ofrece_como_maximo_tres_opciones_numeradas() ->
 
 
 async def test_search_sin_resultados() -> None:
-    r = await buscar(AppIndex(), "zzzzqqq")
+    vacio = AppIndex()
+    vacio.replace([])  # cargado pero sin nada
+    r = await buscar(vacio, "zzzzqqq")
     assert r["ganador_claro"] is False and r["resultados"] == [] and "opciones" not in r

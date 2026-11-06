@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from hands.apps import desktop, epic, folders, registry, startapps, startmenu, steam
@@ -56,16 +57,24 @@ def _es_windows() -> bool:
 
 
 def discover(powershell: Callable[[str], str] = run_powershell) -> list[AppEntry]:
-    """Una fuente que falla no tumba a las demás: se registra y se sigue."""
+    """Una fuente que falla no tumba a las demás: se registra y se sigue.
+
+    Las fuentes se recogen a la vez: `Get-StartApps` (PowerShell en frío) tarda segundos y no tiene por qué retrasar
+    al resto. El orden del resultado es el de siempre.
+    """
     if not _es_windows():
         return []
-    entries: list[AppEntry] = []
-    for nombre, recoger in _fuentes(powershell).items():
+
+    def collect(item: tuple[str, Callable[[], list[AppEntry]]]) -> list[AppEntry]:
+        nombre, recoger = item
         try:
             encontradas = recoger()
         except Exception:
             log.warning("fuente de apps '%s' no disponible", nombre, exc_info=True)
-            continue
+            return []
         log.info("fuente de apps '%s': %d entradas", nombre, len(encontradas))
-        entries.extend(encontradas)
-    return entries
+        return encontradas
+
+    fuentes = list(_fuentes(powershell).items())
+    with ThreadPoolExecutor(max_workers=len(fuentes)) as pool:
+        return [entry for found in pool.map(collect, fuentes) for entry in found]

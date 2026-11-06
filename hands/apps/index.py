@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import threading
@@ -85,11 +86,20 @@ def hay_ganador_claro(resultados: Sequence[Resultado]) -> bool:
 class AppIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._ready = threading.Event()  # se activa con la primera carga, de la caché o del descubrimiento
         self._entries: dict[str, AppEntry] = {}
         self._names: dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    @property
+    def ready(self) -> bool:
+        return self._ready.is_set()
+
+    async def wait_ready(self, timeout: float) -> bool:
+        """Espera a la primera carga sin bloquear el bucle de eventos. False si no llegó a tiempo."""
+        return self._ready.is_set() or await asyncio.to_thread(self._ready.wait, timeout)
 
     def replace(self, entries: Iterable[AppEntry]) -> None:
         """Sustituye el contenido, quedándose con una sola entrada por nombre normalizado."""
@@ -103,6 +113,7 @@ class AppIndex:
         names = {e.id: normalize(e.name) for e in by_id.values()}
         with self._lock:
             self._entries, self._names = by_id, names
+        self._ready.set()
 
     def get(self, app_id: str) -> AppEntry | None:
         return self._entries.get(app_id)

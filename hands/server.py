@@ -24,6 +24,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from hands.actionlog import ActionLog
 from hands.apps import discovery, launcher
+from hands.apps.cache import DEFAULT_PATH, DEFAULT_TTL_SECONDS, IndexCache
 from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry
 from hands.apps.policy import LaunchPolicy
@@ -41,6 +42,7 @@ log = logging.getLogger("hands")
 
 HOST = "127.0.0.1"
 REFRESH_SECONDS = 15 * 60
+READY_TIMEOUT_SECONDS = 30.0  # lo que espera una herramienta de apps a que termine la primera carga del índice
 MAX_OPCIONES = 3  # si hay que preguntar, nunca más de tres opciones
 
 
@@ -78,9 +80,18 @@ def build_server(
     closer: AppCloser | None = None,
     media: Media | None = None,
     launch_policy: LaunchPolicy | None = None,
+    ready_timeout: float = READY_TIMEOUT_SECONDS,
 ) -> MCPServer:
     server = MCPServer("hands-mcp")
     policy = launch_policy or LaunchPolicy.load()
+
+    async def not_ready() -> dict[str, Any] | None:
+        if await index.wait_ready(ready_timeout):
+            return None
+        return {
+            "ok": False,
+            "mensaje": "Aún estoy indexando las aplicaciones del equipo; prueba de nuevo en unos segundos.",
+        }
 
     async def audited(tool: str, args: dict[str, Any], run: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
         started = time.monotonic()
@@ -104,6 +115,8 @@ def build_server(
     )
     async def apps_search(nombre: str, limite: int = 5) -> dict[str, Any]:
         async def run() -> dict[str, Any]:
+            if (waiting := await not_ready()) is not None:
+                return waiting
             found = index.search(nombre, limit=max(1, min(limite, 10)))
             items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
             if not found:
@@ -141,6 +154,8 @@ def build_server(
     )
     async def apps_launch(id: str, confirmado: bool = False) -> dict[str, Any]:
         async def run() -> dict[str, Any]:
+            if (waiting := await not_ready()) is not None:
+                return waiting
             entry = index.get(id)
             if entry is None:
                 return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
@@ -291,11 +306,40 @@ def create_app(server: MCPServer, token: str) -> ASGIApp:
     return TokenAuthMiddleware(server.streamable_http_app(host=HOST), token)
 
 
-async def _refresh_forever(index: AppIndex, every: float = REFRESH_SECONDS) -> None:
+async def load_index(
+    index: AppIndex,
+    cache: IndexCache,
+    discover: Callable[[], list[AppEntry]] = discovery.discover,
+) -> None:
+    """Primera carga: la caché si sigue vigente (instantánea); si no, se descubre y se guarda para el próximo arranque."""
+    cached = cache.load()
+    if cached is not None:
+        index.replace(cached)
+        log.info("índice de apps: %d entradas (de la caché)", len(index))
+        return
+    try:
+        entries = await asyncio.to_thread(discover)
+    except Exception:
+        log.exception("no se pudo construir el índice de apps")
+        index.replace([])  # vacío pero listo: mejor "0 resultados" que hacer esperar
+        return
+    index.replace(entries)
+    cache.save(entries)
+    log.info("índice de apps: %d entradas", len(index))
+
+
+async def _refresh_forever(
+    index: AppIndex,
+    cache: IndexCache,
+    every: float = REFRESH_SECONDS,
+    discover: Callable[[], list[AppEntry]] = discovery.discover,
+) -> None:
     while True:
         await asyncio.sleep(every)
         try:
-            index.replace(await asyncio.to_thread(discovery.discover))
+            entries = await asyncio.to_thread(discover)
+            index.replace(entries)
+            cache.save(entries)
         except Exception:
             log.warning("no se pudo refrescar el índice de apps", exc_info=True)
 
@@ -309,8 +353,10 @@ def _build_closer(session: BrowserSession) -> AppCloser:
 
 
 async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_path: Path) -> None:
-    index.replace(await asyncio.to_thread(discovery.discover))
-    log.info("índice de apps: %d entradas", len(index))
+    # Se arranca ya y el índice se carga en segundo plano: las herramientas de apps esperan a que esté listo.
+    ttl = float(os.environ.get("DIOGENES_INDEX_CACHE_MINUTES", DEFAULT_TTL_SECONDS / 60)) * 60
+    cache = IndexCache(Path(os.environ.get("DIOGENES_INDEX_CACHE", str(DEFAULT_PATH))), ttl)
+    loading = asyncio.create_task(load_index(index, cache))
     fetcher = HttpFetcher()
     session = BrowserSession(
         preferred=os.environ.get("DIOGENES_BROWSER", "chrome"),
@@ -328,10 +374,11 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
     media = Media(WinKeySender()) if sys.platform == "win32" else None
     server = build_server(index, actions=actions, web=web, browser=browser, closer=closer, media=media)
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
-    refresh = asyncio.create_task(_refresh_forever(index))
+    refresh = asyncio.create_task(_refresh_forever(index, cache))
     try:
         await uvicorn.Server(config).serve()
     finally:
+        loading.cancel()
         refresh.cancel()
         await fetcher.aclose()
         await session.aclose()
