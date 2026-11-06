@@ -18,6 +18,7 @@ from core.choices import PendingChoice, ask_again, is_affirmation, parse_options
 from core.intent import IntentGate
 from core.llm.base import LLMProvider, Message, ToolCall, ToolSpec
 from core.mcp_client import ToolBackend
+from core.router import Router
 from core.safety import Confirm, ConfirmationPolicy
 
 SYSTEM_PROMPT = """Eres Diogenes, un asistente que controla este ordenador Windows. Responde en español, breve y seco.
@@ -417,6 +418,7 @@ class Agent:
         *,
         policy: ConfirmationPolicy | None = None,
         intent: IntentGate | None = None,
+        router: Router | None = None,
         confirm: Confirm | None = None,
         max_steps: int = 12,
         max_seconds: float = 180.0,
@@ -428,6 +430,7 @@ class Agent:
         self._backend = backend
         self._policy = policy or ConfirmationPolicy.load()
         self._intent = intent or IntentGate.load()
+        self._router = router or Router.load()
         self._confirm = confirm
         self._max_steps = max_steps
         self._max_seconds = max_seconds
@@ -453,6 +456,9 @@ class Agent:
         started = time.monotonic()
         specs, to_mcp = _wire_names(await self._backend.tools())
 
+        if self._pending is None and (answer := await self._shortcut(request, to_mcp, started)) is not None:
+            return answer
+
         pending = self._pending
         if pending and len(pending.options) > 1 and is_affirmation(request) and not resolve(request, pending.options):
             # "sí" ante varias opciones no elige ninguna: se vuelve a preguntar en código, sin que el modelo adivine
@@ -476,6 +482,24 @@ class Agent:
         result.seconds = time.monotonic() - started
         self._last_answer = result.answer
         return result
+
+    async def _shortcut(self, request: str, to_mcp: dict[str, str], started: float) -> AgentResult | None:
+        """Atajo rápido del router (teclas multimedia, volumen): sin LLM. Si la herramienta no existe, sigue el LLM."""
+        shortcut = self._router.match(request)
+        if shortcut is None or shortcut.tool not in to_mcp.values():
+            return None
+        try:
+            output = await self._backend.call(shortcut.tool, dict(shortcut.arguments))
+        except Exception as exc:  # noqa: BLE001
+            output = f"ERROR: {type(exc).__name__}: {exc}"
+        step = Step(shortcut.tool, dict(shortcut.arguments), output, _salio_bien(output))
+        if self._on_step:
+            self._on_step(step)
+        answer = shortcut.answer if step.ok else f"No he podido: {output}"
+        self._trim()
+        self._history += [Message("user", request), Message("assistant", answer)]
+        self._last_user, self._last_answer = request, answer
+        return AgentResult(answer, [step], seconds=time.monotonic() - started)
 
     def _mandate(self, request: str, text: str) -> str:
         """Lo que el usuario ha pedido de verdad en este turno: su mensaje, y si solo dice "sí" a una pregunta del agente,
