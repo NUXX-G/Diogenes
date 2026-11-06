@@ -10,6 +10,7 @@ from mcp import Client
 
 from core.__main__ import repl
 from core.agent import Agent
+from core.intent import IntentGate
 from core.llm.base import LLMError, LLMResponse, Message, ToolCall, ToolSpec
 from core.mcp_client import McpTools
 from core.safety import ConfirmationPolicy
@@ -339,7 +340,11 @@ async def test_llamadas_identicas_en_una_respuesta_se_ejecutan_una_vez() -> None
     bucle = LLMResponse("", tuple(ToolCall("apps_launch", {"id": "startapps:967ad27c"}) for _ in range(9)))
     backend = FakeBackend()
     llm = FakeLLM(bucle, decir("abierto"))
-    resultado = await Agent(llm, backend, policy=POLICY).run("abre el editor")
+    gate = IntentGate.load()
+    gate.observe(
+        "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:967ad27c", "nombre": "Editor"}]})
+    )
+    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor")
     assert backend.calls == [("apps.launch", {"id": "startapps:967ad27c"})]
     assert len(resultado.steps) == 1
     # el historial refleja lo que realmente se ejecutó, no las nueve copias

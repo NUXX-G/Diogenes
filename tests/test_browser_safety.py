@@ -9,6 +9,7 @@ import pytest
 from mcp import Client
 
 from core.agent import SNAPSHOT_STUB, Agent
+from core.intent import IntentGate
 from core.llm.base import LLMResponse, ToolCall
 from core.mcp_client import McpTools
 from core.safety import ConfirmationPolicy
@@ -173,6 +174,13 @@ async def test_tras_rellenar_un_formulario_cualquier_boton_pide_confirmacion() -
     assert (await svc.click("e3"))["ok"] is True
 
 
+def web_pedida() -> IntentGate:
+    """Estos tests prueban las reglas del navegador, no la puerta de intención: la web ya estaba pedida."""
+    gate = IntentGate.load()
+    gate.observe("browser.open", {"url": "https://ejemplo.es"}, '{"ok": true}')
+    return gate
+
+
 # --- agente + hands en proceso: la inyección de prompt --------------------------------------------------
 
 
@@ -198,7 +206,8 @@ async def ejecutar(
             return await super().call(name, arguments)
 
     async with Client(build_server(AppIndex(), browser=svc)) as client:
-        resultado = await Agent(llm, Espia(client), policy=POLICY, confirm=confirm).run("mira la página")
+        agent = Agent(llm, Espia(client), policy=POLICY, intent=web_pedida(), confirm=confirm)
+        resultado = await agent.run("mira la página")
     return resultado, page, vistas
 
 
@@ -207,7 +216,8 @@ async def ejecutar_con(
 ) -> tuple[Any, FakePage, list[tuple[str, dict[str, Any]]]]:
     svc = BrowserService(Provider(page), RULES)
     async with Client(build_server(AppIndex(), browser=svc)) as client:
-        resultado = await Agent(llm, McpTools(client), policy=POLICY, confirm=confirm).run("manda el mensaje")
+        agent = Agent(llm, McpTools(client), policy=POLICY, intent=web_pedida(), confirm=confirm)
+        resultado = await agent.run("manda el mensaje")
     return resultado, page, []
 
 

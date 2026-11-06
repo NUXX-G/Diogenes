@@ -9,6 +9,23 @@
     "shell.run",
     "settings.change"
   ],
+  "intencion": {
+    "verbos": {
+      "abrir": ["abr*", "lanz*", "ejecut*", "inici*", "arranc*", "pon", "ponm*", "ponl*", "open", "launch", "start", "run", "play", "reproduc*", "juega*", "jugar", "quiero", "dame", "muestr*", "ensen*", "show"],
+      "navegar": ["ve", "ir", "vete", "ven", "entra*", "navega*", "visita*", "go", "visit", "navigate", "dame", "muestr*", "ensen*", "show"],
+      "buscar": ["busc*", "busqu*", "search", "find", "look", "encuentr*", "encontr*", "dame", "muestr*", "ensen*", "show", "quiero", "pon", "ponm*"],
+      "cerrar": ["cierr*", "cerr*", "close", "quit", "termin*", "sal", "salir"]
+    },
+    "herramientas": {
+      "apps.launch": {"verbos": ["abrir"], "objetivo": "app"},
+      "apps.close": {"verbos": ["cerrar"], "objetivo": "app"},
+      "web.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
+      "browser.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
+      "web.site_search": {"verbos": ["buscar", "abrir", "navegar"], "objetivo": "sitio"}
+    },
+    "libres_en_web": ["browser.click", "browser.type"],
+    "palabras_genericas": ["de", "del", "la", "el", "los", "las", "app", "apps", "application", "aplicacion", "microsoft", "windows", "google", "the", "for", "desktop", "classic", "new", "version", "launcher"]
+  },
   "navegador": {
     "verbos_irreversibles": [
       "enviar", "envia", "enviar mensaje", "send", "send message",
