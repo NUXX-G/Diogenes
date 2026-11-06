@@ -14,9 +14,9 @@ from rapidfuzz import fuzz, process
 from hands.apps.models import AppEntry, normalize
 
 # Si dos fuentes dan la misma app, gana la primera: es la que Windows o el cliente de juegos usan de verdad.
-PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "registry")
+PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "carpetas", "desktop", "registry")
 # Fuentes con interfaz propia. `registry` (App Paths) son ejecutables sueltos, a menudo de consola o de apoyo.
-CON_INTERFAZ = frozenset({"startapps", "steam", "epic", "startmenu"})
+CON_INTERFAZ = frozenset({"startapps", "steam", "epic", "startmenu", "carpetas", "desktop"})
 # Con WRatio el ruido (nombres cortos que "contienen" la consulta) llega a ~67; los aciertos reales, a 90+.
 SCORE_MINIMO = 72.0
 # Diferencia de puntuación a partir de la cual, con el resto igual, hay un ganador claro.

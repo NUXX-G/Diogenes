@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from hands.apps import epic, registry, startapps, startmenu, steam
+from hands.apps import desktop, epic, folders, registry, startapps, startmenu, steam
 from hands.apps.models import AppEntry
 
 log = logging.getLogger(__name__)
@@ -46,6 +46,8 @@ def _fuentes(powershell: Callable[[str], str]) -> dict[str, Callable[[], list[Ap
         registry.SOURCE: lambda: registry.parse(registry.read_app_paths()),
         steam.SOURCE: _collect_steam,
         epic.SOURCE: lambda: epic.scan(epic.manifests_dir()),
+        folders.SOURCE: lambda: folders.scan(folders.resolve()),
+        desktop.SOURCE: lambda: desktop.scan(desktop.roots()),
     }
 
 
