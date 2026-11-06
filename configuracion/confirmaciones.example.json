@@ -10,6 +10,12 @@
     "shell.run",
     "settings.change"
   ],
+  "ejecutables": {
+    "extensiones": [
+      ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+      ".msi", ".msp", ".reg", ".jar", ".hta", ".cpl", ".msc", ".gadget", ".application", ".appx", ".msix"
+    ]
+  },
   "cierre": {
     "confirmar_cierre_suave": true,
     "espera_segundos": 4,

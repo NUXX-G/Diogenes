@@ -26,6 +26,7 @@ from hands.actionlog import ActionLog
 from hands.apps import discovery, launcher
 from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry
+from hands.apps.policy import LaunchPolicy
 from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.system.closer import AppCloser, CloseConfig
@@ -76,8 +77,10 @@ def build_server(
     browser: BrowserService | None = None,
     closer: AppCloser | None = None,
     media: Media | None = None,
+    launch_policy: LaunchPolicy | None = None,
 ) -> MCPServer:
     server = MCPServer("hands-mcp")
+    policy = launch_policy or LaunchPolicy.load()
 
     async def audited(tool: str, args: dict[str, Any], run: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
         started = time.monotonic()
@@ -131,17 +134,28 @@ def build_server(
 
     @server.tool(
         name="apps.launch",
-        description="Abre una aplicación o juego usando un id devuelto por apps.search. No acepta otras órdenes.",
+        description=(
+            "Abre una aplicación, juego, carpeta o archivo usando un id devuelto por apps.search. No acepta otras "
+            "órdenes. Los ejecutables y scripts (.exe, .bat, .ps1…) devuelven requiere_confirmacion: decide el usuario."
+        ),
     )
-    async def apps_launch(id: str) -> dict[str, Any]:
+    async def apps_launch(id: str, confirmado: bool = False) -> dict[str, Any]:
         async def run() -> dict[str, Any]:
             entry = index.get(id)
             if entry is None:
                 return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
+            if not confirmado and policy.requires_confirmation(entry):
+                return {
+                    "ok": False,
+                    "requiere_confirmacion": True,
+                    "objetivo": f"{entry.name} ({entry.target})",
+                    "motivo": "es un ejecutable o script: Windows lo ejecutaría con tus permisos",
+                }
             launch(entry)
             return {"ok": True, "mensaje": f"Lanzado {entry.name}"}
 
-        return await audited("apps.launch", {"id": id}, run)
+        logged = {"id": id, "confirmado": True} if confirmado else {"id": id}
+        return await audited("apps.launch", logged, run)
 
     if media is not None:
 
