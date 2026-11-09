@@ -51,8 +51,13 @@ def leer_puerto():
 def leer_argumentos(argv=None):
     p = argparse.ArgumentParser(description="Batería de pruebas de modelos locales (Ollama).")
     p.add_argument("--modelo", nargs="+", help="Uno o varios modelos de Ollama")
-    p.add_argument("--reevaluar", nargs="+", type=Path, default=None,
-                   help="Volver a puntuar JSON ya guardados con las comprobaciones actuales (no llama a Ollama)")
+    p.add_argument(
+        "--reevaluar",
+        nargs="+",
+        type=Path,
+        default=None,
+        help="Volver a puntuar JSON ya guardados con las comprobaciones actuales (no llama a Ollama)",
+    )
     p.add_argument("--temperatura", type=float, default=0.2, help="temperature (por defecto 0.2)")
     p.add_argument("--top-p", type=float, default=None, help="top_p (por defecto, el del modelo)")
     p.add_argument("--top-k", type=int, default=None, help="top_k (por defecto, el del modelo)")
@@ -67,9 +72,12 @@ def leer_argumentos(argv=None):
     p.add_argument("--salida", type=Path, default=CARPETA / "resultados")
     p.add_argument("--url", default=None, help="URL de Ollama (por defecto http://127.0.0.1:OLLAMA_HOST_PORT)")
     p.add_argument("--contenedor", default="diogenes-ollama-1", help="Contenedor para docker stats")
-    p.add_argument("--reiniciar-contenedor", action="store_true",
-                   help="Reiniciar el contenedor antes de cada modelo para que docker stats no cuente la caché "
-                        "de los modelos anteriores")
+    p.add_argument(
+        "--reiniciar-contenedor",
+        action="store_true",
+        help="Reiniciar el contenedor antes de cada modelo para que docker stats no cuente la caché "
+        "de los modelos anteriores",
+    )
     p.add_argument("--timeout", type=int, default=600, help="Segundos máximos por petición")
     return p.parse_args(argv)
 
@@ -122,8 +130,11 @@ def memoria_ollama(url, modelo):
     """Memoria que Ollama dice que ocupa el modelo cargado (/api/ps), en MiB."""
     for m in llamar(url, "/api/ps").get("models", []):
         if m["name"] == modelo:
-            return {"size_mib": round(m["size"] / 1024**2, 1), "size_vram_mib": round(m.get("size_vram", 0) / 1024**2, 1),
-                    "contexto": m.get("context_length")}
+            return {
+                "size_mib": round(m["size"] / 1024**2, 1),
+                "size_vram_mib": round(m.get("size_vram", 0) / 1024**2, 1),
+                "contexto": m.get("context_length"),
+            }
     return None
 
 
@@ -156,8 +167,17 @@ def a_mib(texto):
     if not m:
         return None
     valor, unidad = float(m.group(1)), m.group(2).lower()
-    factores = {"b": 1 / 1024**2, "kb": 1 / 1024, "kib": 1 / 1024, "mb": 1, "mib": 1,
-                "gb": 1024, "gib": 1024, "tb": 1024**2, "tib": 1024**2}
+    factores = {
+        "b": 1 / 1024**2,
+        "kb": 1 / 1024,
+        "kib": 1 / 1024,
+        "mb": 1,
+        "mib": 1,
+        "gb": 1024,
+        "gib": 1024,
+        "tb": 1024**2,
+        "tib": 1024**2,
+    }
     return valor * factores.get(unidad, 1)
 
 
@@ -175,7 +195,10 @@ class MedidorDocker(threading.Thread):
             try:
                 salida = subprocess.run(
                     ["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}|{{.CPUPerc}}", self.contenedor],
-                    check=False, capture_output=True, text=True, timeout=30,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 ).stdout.strip()
                 mem, cpu = salida.split("|")
                 mem_mib = a_mib(mem.split("/")[0])
@@ -360,10 +383,8 @@ def consistencia(repeticiones):
     veredictos = {r["correcto"] for r in repeticiones}
     herramientas = {json.dumps(r["llamadas_herramienta"], sort_keys=True, ensure_ascii=False) for r in repeticiones}
     textos = [r["respuesta"] for r in repeticiones]
-    pares = [(a, b) for i, a in enumerate(textos) for b in textos[i + 1:]]
-    similitud = (
-        sum(difflib.SequenceMatcher(None, a, b).ratio() for a, b in pares) / len(pares) if pares else 1.0
-    )
+    pares = [(a, b) for i, a in enumerate(textos) for b in textos[i + 1 :]]
+    similitud = sum(difflib.SequenceMatcher(None, a, b).ratio() for a, b in pares) / len(pares) if pares else 1.0
     return {
         "mismo_veredicto": len(veredictos) == 1,
         "misma_llamada": len(herramientas) == 1,
@@ -384,9 +405,18 @@ def ejecutar_modelo(url, modelo, bateria, args):
 
     # Calentamiento: carga el modelo en memoria para no medir la carga en la primera prueba.
     inicio = time.perf_counter()
-    llamar(url, "/api/chat", {"model": modelo, "messages": [{"role": "user", "content": "Hola"}],
-                              "stream": False, "options": opciones, **({"think": think} if think is not None else {})},
-           timeout=args.timeout)
+    llamar(
+        url,
+        "/api/chat",
+        {
+            "model": modelo,
+            "messages": [{"role": "user", "content": "Hola"}],
+            "stream": False,
+            "options": opciones,
+            **({"think": think} if think is not None else {}),
+        },
+        timeout=args.timeout,
+    )
     carga_s = round(time.perf_counter() - inicio, 2)
     memoria = memoria_ollama(url, modelo)
 
@@ -403,16 +433,21 @@ def ejecutar_modelo(url, modelo, bateria, args):
                 )
                 repeticiones.append(r)
                 marca = "OK " if r["correcto"] else "NO "
-                print(f"  {marca}{prompt['id']:<22} #{i + 1}  {r['tiempo_total_s']:>6.1f}s  "
-                      f"{r['tokens_por_s'] or 0:>5.1f} tok/s  {r['motivo']}", flush=True)
-            resultados.append({
-                "id": prompt["id"],
-                "categoria": prompt["categoria"],
-                "prompt": prompt["prompt"],
-                "repeticiones": repeticiones,
-                "aciertos": sum(r["correcto"] for r in repeticiones),
-                "consistencia": consistencia(repeticiones),
-            })
+                print(
+                    f"  {marca}{prompt['id']:<22} #{i + 1}  {r['tiempo_total_s']:>6.1f}s  "
+                    f"{r['tokens_por_s'] or 0:>5.1f} tok/s  {r['motivo']}",
+                    flush=True,
+                )
+            resultados.append(
+                {
+                    "id": prompt["id"],
+                    "categoria": prompt["categoria"],
+                    "prompt": prompt["prompt"],
+                    "repeticiones": repeticiones,
+                    "aciertos": sum(r["correcto"] for r in repeticiones),
+                    "consistencia": consistencia(repeticiones),
+                }
+            )
     finally:
         medidor.parar.set()
         medidor.join()

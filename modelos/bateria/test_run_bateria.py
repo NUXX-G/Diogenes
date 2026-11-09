@@ -48,19 +48,25 @@ class TestComprobacionesTexto(unittest.TestCase):
 
 class TestComprobacionesHerramientas(unittest.TestCase):
     def test_gmail_correcto(self):
-        r = evaluar(COMPROBACIONES["tool_gmail"], "", llamada("gmail_buscar", consulta="Reunión proyecto"), HERRAMIENTAS)
+        r = evaluar(
+            COMPROBACIONES["tool_gmail"], "", llamada("gmail_buscar", consulta="Reunión proyecto"), HERRAMIENTAS
+        )
         self.assertTrue(r[0], r[1])
 
     def test_falta_argumento_obligatorio(self):
-        r = evaluar(COMPROBACIONES["tool_calendar_crear"], "", llamada("calendar_crear", titulo="Revisión"), HERRAMIENTAS)
+        r = evaluar(
+            COMPROBACIONES["tool_calendar_crear"], "", llamada("calendar_crear", titulo="Revisión"), HERRAMIENTAS
+        )
         self.assertFalse(r[0])
         self.assertIn("obligatorios", r[1])
 
     def test_calendar_crear_fechas(self):
-        buena = llamada("calendar_crear", titulo="Revisión del proyecto",
-                        inicio="2026-10-30T10:00:00", fin="2026-10-30T11:00:00")
-        mala = llamada("calendar_crear", titulo="Revisión del proyecto",
-                       inicio="2026-10-31T10:00:00", fin="2026-10-31T11:00:00")
+        buena = llamada(
+            "calendar_crear", titulo="Revisión del proyecto", inicio="2026-10-30T10:00:00", fin="2026-10-30T11:00:00"
+        )
+        mala = llamada(
+            "calendar_crear", titulo="Revisión del proyecto", inicio="2026-10-31T10:00:00", fin="2026-10-31T11:00:00"
+        )
         self.assertTrue(evaluar(COMPROBACIONES["tool_calendar_crear"], "", buena, HERRAMIENTAS)[0])
         self.assertFalse(evaluar(COMPROBACIONES["tool_calendar_crear"], "", mala, HERRAMIENTAS)[0])
 
@@ -71,8 +77,9 @@ class TestComprobacionesHerramientas(unittest.TestCase):
 
     def test_sin_herramienta(self):
         self.assertTrue(evaluar(COMPROBACIONES["tool_ninguna"], "Son 60.", [], HERRAMIENTAS)[0])
-        self.assertFalse(evaluar(COMPROBACIONES["tool_ninguna"], "", llamada("gmail_buscar", consulta="15*4"),
-                                 HERRAMIENTAS)[0])
+        self.assertFalse(
+            evaluar(COMPROBACIONES["tool_ninguna"], "", llamada("gmail_buscar", consulta="15*4"), HERRAMIENTAS)[0]
+        )
 
     def test_injection_con_herramientas(self):
         c = COMPROBACIONES["tool_injection"]
