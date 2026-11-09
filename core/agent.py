@@ -6,6 +6,7 @@ tamaño, para que un modelo de 4B no pierda el hilo ni reviente su contexto.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -76,6 +77,7 @@ USER_NAMED_FLAG = "nombrado"  # solo lo pone el código si el mensaje del usuari
 CODE_ONLY_ARGS = frozenset({HUMAN_FLAG, USER_NAMED_FLAG})
 # Estas herramientas ven lo que hay abierto: deciden ellas si preguntar, con un único "sí" y el detalle real.
 TOOL_DECIDES_CONFIRMATION = frozenset({"apps.close"})
+PANIC_TOOL = "system.panic"  # solo la llama el código (botón del pánico): el modelo ni la ve
 EXTERNAL_LINK = "destino_externo"  # browser.click avisa de un enlace a otro dominio; solo aquí se sabe cuál se pidió
 PAGE_MARKER = "[CONTENIDO DE LA PÁGINA"  # lo antepone hands a toda página que devuelve
 SNAPSHOT_STUB = "[página anterior omitida; la vigente es la última]"
@@ -104,6 +106,8 @@ def _wire_names(specs: list[ToolSpec]) -> tuple[list[ToolSpec], dict[str, str]]:
     to_mcp: dict[str, str] = {}
     exposed: list[ToolSpec] = []
     for spec in specs:
+        if spec.name == PANIC_TOOL:
+            continue
         safe = spec.name.replace(".", "_")
         to_mcp[safe] = spec.name
         parameters = spec.parameters
@@ -482,6 +486,11 @@ class Agent:
         result = AgentResult("")
         try:
             await self._loop(specs, to_mcp, result, started, original)
+        except asyncio.CancelledError:
+            del self._history[turn_start:]
+            self._pending = None  # tras el pánico, un "sí" o "el segundo" no puede reanudar lo cancelado
+            self._last_user = self._last_answer = ""
+            raise
         except BaseException:
             del self._history[turn_start:]  # un turno a medias dejaría el historial incoherente
             raise
@@ -539,6 +548,7 @@ class Agent:
         for _ in range(self._max_steps):
             if time.monotonic() - started > self._max_seconds:
                 break
+            await asyncio.sleep(0)  # punto de cancelación en cada vuelta, aunque nada más ceda el control
             response = await self._llm.chat([Message("system", SYSTEM_PROMPT), *self._history], specs)
             if not response.tool_calls:
                 result.answer = _grounded(response.content.strip(), result.steps)

@@ -43,6 +43,7 @@ class BrowserPage(Protocol):
 
 class PageProvider(Protocol):
     async def page(self) -> BrowserPage: ...
+    async def release(self) -> None: ...
 
 
 def _is_http_url(url: str) -> bool:
@@ -92,6 +93,15 @@ class BrowserService:
         self._digest: str | None = None
         self._signatures: frozenset[tuple[str, str]] = frozenset()  # (rol, nombre) de la última página
         self._last_url = ""
+
+    async def release(self) -> None:
+        """Botón del pánico: olvida la página y suelta la conexión. Las ventanas siguen abiertas."""
+        self._nodes = {}
+        self._form_dirty = False
+        self._digest = None
+        self._signatures = frozenset()
+        self._last_url = ""
+        await self._provider.release()
 
     async def _state(self, page: BrowserPage) -> dict[str, Any]:
         url, title = await page.current()

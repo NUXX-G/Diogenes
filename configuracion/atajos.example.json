@@ -1,4 +1,5 @@
 {
+  "boton_panico": "ctrl+alt+esc",
   "relleno": ["diogenes", "oye", "hey", "venga", "por favor", "porfa", "porfavor", "ahora", "gracias"],
   "teclas": {
     "play_pausa": {

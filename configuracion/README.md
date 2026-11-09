@@ -43,6 +43,9 @@ Frases que el router (`core/router.py`) resuelve sin LLM: teclas multimedia y vo
 `atajos.example.json`. Solo cuenta si **toda** la frase es un atajo (tras quitar el `relleno`: «Diogenes», «por favor»…);
 `veces` es cuántas pulsaciones da (el volumen sube de 2 en 2 %).
 
+`boton_panico` es el atajo global que cancela la tarea en curso, vacía la cola y suelta el navegador sin cerrar ventanas
+(por defecto `ctrl+alt+esc`). Admite `ctrl`, `alt`, `shift`, `win` más una tecla. En el CLI también vale `/parar`.
+
 ## Variables de entorno de hands
 
 - `DIOGENES_INDEX_CACHE_MINUTES` (10): cuánto vale la caché del índice de apps en `data/apps-index.json`.

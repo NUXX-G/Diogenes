@@ -33,7 +33,7 @@ def texto(result: Any) -> dict[str, Any]:
 async def test_herramientas_publicadas(index: AppIndex) -> None:
     async with Client(hands_server.build_server(index)) as client:
         nombres = {t.name for t in (await client.list_tools()).tools}
-    assert nombres == {"apps.search", "apps.launch"}
+    assert nombres == {"apps.search", "apps.launch", "system.panic"}
 
 
 async def test_buscar_y_lanzar(index: AppIndex, tmp_path: Path) -> None:

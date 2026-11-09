@@ -22,6 +22,7 @@ from hands.browser.service import ClickIntercepted
 
 DEFAULT_PORT = 9222
 DEFAULT_PROFILE = Path("data/browser-profile")
+RELEASE_TIMEOUT_SECONDS = 3.0
 _CANDIDATES = {
     "chrome": [r"%ProgramFiles%\Google\Chrome\Application\chrome.exe", r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe", r"%LocalAppData%\Google\Chrome\Application\chrome.exe"],
     "edge": [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe", r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"],
@@ -191,6 +192,19 @@ class BrowserSession:
                 return
             await asyncio.sleep(0.3)
         raise RuntimeError("El navegador no abrió el puerto de depuración a tiempo.")
+
+    async def release(self) -> None:
+        """Corta la conexión de Playwright sin cerrar ventanas; la siguiente acción vuelve a conectarse.
+
+        No toma `_lock`: tiene que funcionar aunque otra llamada lleve segundos esperando al navegador. Parar Playwright
+        interrumpe además cualquier orden que siguiera en vuelo. El navegador es un proceso aparte y sigue abierto.
+        """
+        playwright, self._pw = self._pw, None
+        self._browser = None
+        self._page = None
+        if playwright is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(playwright.stop(), RELEASE_TIMEOUT_SECONDS)
 
     async def aclose(self) -> None:
         if self._pw is not None:

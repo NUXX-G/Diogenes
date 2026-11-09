@@ -44,6 +44,7 @@ HOST = "127.0.0.1"
 REFRESH_SECONDS = 15 * 60
 READY_TIMEOUT_SECONDS = 30.0  # lo que espera una herramienta de apps a que termine la primera carga del índice
 MAX_OPCIONES = 3  # si hay que preguntar, nunca más de tres opciones
+PANIC_TOOL = "system.panic"
 
 
 class TokenAuthMiddleware:
@@ -93,17 +94,47 @@ def build_server(
             "mensaje": "Aún estoy indexando las aplicaciones del equipo; prueba de nuevo en unos segundos.",
         }
 
+    # Cada herramienta corre en su propia tarea para que el botón del pánico la cancele sin tocar las del servidor MCP.
+    running: set[asyncio.Future[dict[str, Any]]] = set()
+    stopped: set[asyncio.Future[dict[str, Any]]] = set()
+
     async def audited(tool: str, args: dict[str, Any], run: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
         started = time.monotonic()
+        job = asyncio.ensure_future(run())
+        running.add(job)
         try:
-            result = await run()
+            result = await job
+        except asyncio.CancelledError:
+            if job not in stopped:
+                raise
+            result = {"ok": False, "parar": True, "cancelada": True, "mensaje": "Cancelado con el botón del pánico."}
         except Exception as exc:
             if actions:
                 actions.record(tool, args, False, f"{type(exc).__name__}: {exc}", started)
             raise
+        finally:
+            running.discard(job)
+            stopped.discard(job)
         if actions:
             actions.record(tool, args, bool(result.get("ok", True)), str(result.get("mensaje", "")), started)
         return result
+
+    @server.tool(
+        name=PANIC_TOOL,
+        description="Uso interno del botón del pánico: cancela lo que esté en marcha y suelta el navegador sin cerrarlo.",
+    )
+    async def system_panic() -> dict[str, Any]:
+        started = time.monotonic()
+        jobs = list(running)
+        for job in jobs:
+            stopped.add(job)
+            job.cancel()
+        if browser is not None:
+            await browser.release()
+        mensaje = f"{len(jobs)} acciones canceladas; navegador liberado"
+        if actions:
+            actions.record(PANIC_TOOL, {}, True, mensaje, started)
+        return {"ok": True, "mensaje": mensaje}
 
     @server.tool(
         name="apps.search",
