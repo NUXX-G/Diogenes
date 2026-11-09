@@ -96,6 +96,35 @@ def test_sin_confirmacion_configurada_cierra_directamente() -> None:
     assert closer(windows, sin).close(NOTEPAD, confirmed=False)["cerrada"] is True
 
 
+def test_nombrada_por_el_usuario_y_una_sola_app_abierta_cierra_directo() -> None:
+    windows = FakeWindows(bloc())
+    assert closer(windows).close(NOTEPAD, confirmed=False, named=True)["cerrada"] is True
+    assert windows.cerradas == [100]
+
+
+def test_dos_ventanas_de_la_misma_app_no_son_ambiguas() -> None:
+    windows = FakeWindows(bloc(100), bloc(101))
+    assert closer(windows).close(NOTEPAD, confirmed=False, named=True)["cerrada"] is True
+    assert sorted(windows.cerradas) == [100, 101]
+
+
+def test_varias_apps_que_coinciden_piden_confirmacion_aunque_la_haya_nombrado() -> None:
+    otra = Win(200, 5000, "Bloc de notas - Word", "C:\\Office\\winword.exe")
+    windows = FakeWindows(bloc(), otra)
+    res = closer(windows).close(NOTEPAD, confirmed=False, named=True)
+    assert res["requiere_confirmacion"] is True and "varias" in res["motivo"]
+    assert "notepad.exe" in res["objetivo"] and "winword.exe" in res["objetivo"]
+    assert windows.cerradas == []
+
+
+def test_app_de_app_paths_pide_confirmacion_aunque_la_haya_nombrado() -> None:
+    entry = AppEntry("registry:notepad.exe", "notepad", "registry", "file", "C:\\Windows\\notepad.exe")
+    windows = FakeWindows(bloc())
+    res = closer(windows).close(entry, confirmed=False, named=True)
+    assert res["requiere_confirmacion"] is True and "App Paths" in res["motivo"]
+    assert windows.cerradas == []
+
+
 def test_app_que_no_esta_abierta() -> None:
     res = closer(FakeWindows(Win(1, 1, "Otra cosa", "C:\\x\\otra.exe"))).close(NOTEPAD, confirmed=True)
     assert res["ok"] is False and "no está abierta" in res["mensaje"]
@@ -218,29 +247,41 @@ async def pasos(windows: FakeWindows, llm: FakeLLM, texto: str, respuestas: list
         return await agent.run(texto), preguntas
 
 
-async def test_agente_cierra_con_una_confirmacion() -> None:
+async def test_agente_cierra_sin_preguntar_lo_que_el_usuario_nombro() -> None:
     windows = FakeWindows(bloc())
     llm = FakeLLM(
         llamar("apps_search", nombre="bloc de notas"),
         llamar("apps_close", id="startapps:bloc"),
         decir("Cerrado."),
     )
-    resultado, preguntas = await pasos(windows, llm, "cierra el bloc de notas", [True])
-    assert preguntas == ["apps.close"]
+    resultado, preguntas = await pasos(windows, llm, "cierra el bloc de notas", [])
+    assert preguntas == []
     assert json.loads(resultado.steps[-1].result)["cerrada"] is True
     assert windows.cerradas == [100]
 
 
-async def test_agente_si_el_usuario_dice_no_no_se_cierra_nada() -> None:
+async def test_agente_si_el_modelo_propone_cerrar_pregunta_una_vez_y_el_no_se_respeta() -> None:
     windows = FakeWindows(bloc())
     llm = FakeLLM(
         llamar("apps_search", nombre="bloc de notas"),
         llamar("apps_close", id="startapps:bloc"),
         decir("Vale, no lo cierro."),
     )
-    resultado, _ = await pasos(windows, llm, "cierra el bloc de notas", [False])
+    resultado, preguntas = await pasos(windows, llm, "búscame el bloc de notas", [False])
+    assert preguntas == ["apps.close"]
     assert resultado.steps[-1].result.startswith("DENEGADO")
     assert windows.cerradas == []
+
+
+async def test_agente_si_el_modelo_propone_cerrar_y_el_usuario_acepta_basta_un_si() -> None:
+    windows = FakeWindows(bloc())
+    llm = FakeLLM(
+        llamar("apps_search", nombre="bloc de notas"),
+        llamar("apps_close", id="startapps:bloc"),
+        decir("Cerrado."),
+    )
+    _, preguntas = await pasos(windows, llm, "búscame el bloc de notas", [True])
+    assert preguntas == ["apps.close"] and windows.cerradas == [100]
 
 
 async def test_agente_forzar_es_otra_confirmacion_distinta() -> None:
@@ -251,8 +292,8 @@ async def test_agente_forzar_es_otra_confirmacion_distinta() -> None:
         llamar("apps_force_close", id="startapps:bloc"),
         decir("Forzado."),
     )
-    resultado, preguntas = await pasos(windows, llm, "cierra el bloc de notas y fuérzalo si hace falta", [True, True])
-    assert preguntas == ["apps.close", "apps.force_close"]
+    resultado, preguntas = await pasos(windows, llm, "cierra el bloc de notas y fuérzalo si hace falta", [True])
+    assert preguntas == ["apps.force_close"]
     assert windows.terminados == [4000]
     assert json.loads(resultado.steps[-1].result)["forzada"] is True
 
@@ -265,7 +306,7 @@ async def test_agente_el_modelo_no_puede_forzar_sin_que_el_usuario_confirme_apar
         llamar("apps_force_close", id="startapps:bloc"),
         decir("No lo he forzado."),
     )
-    await pasos(windows, llm, "cierra el bloc de notas", [True, False])
+    await pasos(windows, llm, "cierra el bloc de notas", [False])
     assert windows.terminados == []
 
 

@@ -25,7 +25,8 @@ secciones siguientes.
   - `libres_en_web`: herramientas del navegador que van directas dentro de una web que el usuario pidió.
   - `palabras_genericas`: palabras de un nombre de app que no cuentan al compararlo con lo que dijo el usuario.
 - `cierre` (`hands/system/closer.py`): `apps.close` y `apps.force_close`.
-  - `confirmar_cierre_suave`: pedir confirmación antes de cerrar como con el botón X (por defecto, sí).
+  - `confirmar_cierre_suave`: con `true` (por defecto) el cierre como con el botón X va directo si nombras la app y solo
+    coincide una abierta; pregunta si la propone el modelo, si coinciden varias o si es de App Paths. Con `false`, nunca.
   - `espera_segundos`: cuánto espera a que la app se cierre antes de decir que sigue abierta.
   - `procesos_protegidos`: ejecutables que nunca se cierran. Además se protegen siempre el proceso de hands, su padre y el
     navegador de Diogenes mientras esté abierto. Forzar el cierre (`apps.force_close`) está en `herramientas`, así que

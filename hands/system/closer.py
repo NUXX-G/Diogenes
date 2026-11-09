@@ -1,7 +1,8 @@
 """Cerrar aplicaciones: primero como el botón X (deja guardar) y, solo si sigue abierta, forzar con otra confirmación.
 
-- `close` pide cerrar las ventanas de la app con WM_CLOSE y espera un poco. Antes pide confirmación al usuario
-  (devuelve `requiere_confirmacion`, igual que las herramientas del navegador).
+- `close` pide cerrar las ventanas de la app con WM_CLOSE y espera un poco. Va directo si el usuario nombró la app en su
+  mensaje (`core` lo indica con `nombrado`) y coincide sin ambigüedad con una sola app abierta. Si la propuso el modelo,
+  si coinciden varias apps o si viene de App Paths, devuelve `requiere_confirmacion`, igual que el navegador.
 - `force_close` termina el proceso. Solo se acepta si antes se intentó el cierre suave de ese mismo proceso y la app sigue
   abierta; la confirmación (distinta, y siempre) la impone el agente porque `apps.force_close` está en la lista de
   herramientas irreversibles de `configuracion/confirmaciones.json`.
@@ -22,6 +23,7 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from hands.apps.models import AppEntry, normalize
+from hands.apps.registry import SOURCE as APP_PATHS_SOURCE
 from hands.system.windows import Win, WindowBackend
 
 CONFIG_DIR = Path("configuracion")
@@ -108,16 +110,28 @@ class AppCloser:
             }
         return None
 
-    def close(self, entry: AppEntry, confirmed: bool) -> dict[str, Any]:
+    @staticmethod
+    def _why_confirm(entry: AppEntry, wins: list[Win], named: bool) -> str | None:
+        """Motivo para preguntar antes del cierre suave, o None si puede ir directo."""
+        if len({w.exe_name or f"pid {w.pid}" for w in wins}) > 1:
+            return "coincide con varias aplicaciones abiertas"
+        if entry.source == APP_PATHS_SOURCE:
+            return "viene de App Paths, donde el nombre sale del ejecutable y puede no ser la app que dices"
+        if not named:
+            return "no has pedido cerrarla en tu mensaje"
+        return None
+
+    def close(self, entry: AppEntry, confirmed: bool, named: bool = False) -> dict[str, Any]:
         wins = self._windows_of(entry)
         if refusal := self._refusal(entry, wins):
             return refusal
-        if self._config.confirm_soft_close and not confirmed:
+        reason = self._why_confirm(entry, wins, named)
+        if self._config.confirm_soft_close and not confirmed and reason:
             return {
                 "ok": False,
                 "requiere_confirmacion": True,
                 "objetivo": f"{entry.name} ({self._description(wins)})",
-                "motivo": "se cerrará como con el botón X: si tiene cambios sin guardar, te preguntará",
+                "motivo": f"{reason}; se cerrará como con el botón X y, si tiene cambios sin guardar, te preguntará",
             }
         for win in wins:
             self._backend.post_close(win.hwnd)

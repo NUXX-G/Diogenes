@@ -111,19 +111,31 @@ async def test_un_id_que_nunca_se_busco_no_se_abre_solo() -> None:
 
 
 async def test_el_verbo_manda_abrir_no_cerrar() -> None:
-    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, TOOLS)
+    pendiente = json.dumps({"ok": False, "requiere_confirmacion": True, "objetivo": "Bloc de notas", "motivo": "x"})
+    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC, "apps.close": pendiente}, TOOLS)
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("no"))
     preguntas = Preguntas()
     await agente(llm, backend, preguntas).run("abre el bloc de notas")
-    assert llamadas(backend) == ["apps.search"]  # pidió abrir, el modelo quiso cerrar
+    assert backend.calls[1:] == [("apps.close", {"id": "startapps:bloc", "nombrado": False})]  # hands decide y pregunta
     assert preguntas.vistas[0][0] == "apps.close"
 
 
 async def test_cerrar_lo_que_el_usuario_pidio_cerrar_va_directo() -> None:
     backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, TOOLS)
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("ok"))
-    await agente(llm, backend, Preguntas()).run("cierra el bloc de notas")
-    assert llamadas(backend) == ["apps.search", "apps.close"]
+    preguntas = Preguntas()
+    await agente(llm, backend, preguntas).run("cierra el bloc de notas")
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": True})
+    assert preguntas.vistas == []
+
+
+async def test_el_modelo_no_puede_decir_que_el_usuario_nombro_la_app() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, TOOLS)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc", nombrado=True), decir("no")
+    )
+    await agente(llm, backend, Preguntas()).run("búscame el bloc de notas")
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": False})
 
 
 # --- elecciones y confirmaciones de turnos anteriores cuentan como pedidas -------------------------------------

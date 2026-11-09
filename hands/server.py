@@ -194,14 +194,14 @@ def build_server(
                 "después, díselo al usuario; no la fuerces por tu cuenta."
             ),
         )
-        async def apps_close(id: str, confirmado: bool = False) -> dict[str, Any]:
+        async def apps_close(id: str, confirmado: bool = False, nombrado: bool = False) -> dict[str, Any]:
             async def run() -> dict[str, Any]:
                 entry = index.get(id)
                 if entry is None:
                     return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
-                return await asyncio.to_thread(closer.close, entry, confirmado)
+                return await asyncio.to_thread(closer.close, entry, confirmado, nombrado)
 
-            return await audited("apps.close", {"id": id, "confirmado": confirmado}, run)
+            return await audited("apps.close", {"id": id, "confirmado": confirmado, "nombrado": nombrado}, run)
 
         @server.tool(
             name="apps.force_close",
