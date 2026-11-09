@@ -14,6 +14,11 @@
     "extensiones": [
       ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
       ".msi", ".msp", ".reg", ".jar", ".hta", ".cpl", ".msc", ".gadget", ".application", ".appx", ".msix"
+    ],
+    "interpretes": [
+      "cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe",
+      "regedit.exe", "msiexec.exe", "explorer.exe", "bash.exe", "wsl.exe", "python.exe", "pythonw.exe", "py.exe",
+      "node.exe", "java.exe", "javaw.exe", "schtasks.exe", "certutil.exe", "bitsadmin.exe", "forfiles.exe", "conhost.exe"
     ]
   },
   "cierre": {

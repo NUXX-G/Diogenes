@@ -32,7 +32,10 @@ secciones siguientes.
     navegador de Diogenes mientras esté abierto. Forzar el cierre (`apps.force_close`) está en `herramientas`, así que
     siempre pide su propia confirmación.
 - `ejecutables` (`hands/apps/policy.py`): `extensiones` de archivos que `apps.launch` solo abre tras un «sí», aunque el
-  usuario los nombre (`.exe`, `.bat`, `.ps1`, `.msi`…). Añade `.lnk` si quieres que los accesos también pregunten.
+  usuario los nombre (`.exe`, `.bat`, `.ps1`, `.msi`…). Un `.lnk` se juzga por su destino: va directo si apunta a algo no
+  ejecutable o a un `.exe` del menú Inicio, y pregunta si apunta a un script o a un `.exe` desde otro sitio (escritorio) o
+  si no se puede leer. `interpretes`: ejecutables que con argumentos equivalen a un script (`powershell -File x.ps1`).
+  Añade `.lnk` a `extensiones` si quieres que todos los accesos pregunten.
 
 ## `atajos.json`
 

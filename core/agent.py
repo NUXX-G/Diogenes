@@ -76,6 +76,7 @@ USER_NAMED_FLAG = "nombrado"  # solo lo pone el código si el mensaje del usuari
 CODE_ONLY_ARGS = frozenset({HUMAN_FLAG, USER_NAMED_FLAG})
 # Estas herramientas ven lo que hay abierto: deciden ellas si preguntar, con un único "sí" y el detalle real.
 TOOL_DECIDES_CONFIRMATION = frozenset({"apps.close"})
+EXTERNAL_LINK = "destino_externo"  # browser.click avisa de un enlace a otro dominio; solo aquí se sabe cuál se pidió
 PAGE_MARKER = "[CONTENIDO DE LA PÁGINA"  # lo antepone hands a toda página que devuelve
 SNAPSHOT_STUB = "[página anterior omitida; la vigente es la última]"
 MAX_HISTORY_TURNS = 8
@@ -107,7 +108,7 @@ def _wire_names(specs: list[ToolSpec]) -> tuple[list[ToolSpec], dict[str, str]]:
         to_mcp[safe] = spec.name
         parameters = spec.parameters
         properties = parameters.get("properties")
-        if isinstance(properties, dict) and CODE_ONLY_ARGS & properties.keys():  # el modelo no los ve ni los puede pasar
+        if isinstance(properties, dict) and CODE_ONLY_ARGS & properties.keys():  # el modelo no los ve ni los pasa
             parameters = {**parameters, "properties": {k: v for k, v in properties.items() if k not in CODE_ONLY_ARGS}}
             if "required" in parameters:
                 parameters["required"] = [r for r in parameters["required"] if r not in CODE_ONLY_ARGS]
@@ -171,7 +172,8 @@ def _needs_confirmation(output: str) -> dict[str, Any] | None:
     """Las herramientas del navegador deciden por el elemento concreto y piden confirmación en su resultado."""
     data = _json_dict(output)
     if data and data.get("requiere_confirmacion") is True:
-        return {"objetivo": data.get("objetivo", ""), "motivo": data.get("motivo", "")}
+        pending = {"objetivo": data.get("objetivo", ""), "motivo": data.get("motivo", "")}
+        return {**pending, EXTERNAL_LINK: data[EXTERNAL_LINK]} if data.get(EXTERNAL_LINK) else pending
     return None
 
 
@@ -604,8 +606,13 @@ class Agent:
             output = await self._backend.call(name, sent)
             pending = _needs_confirmation(output)
             if pending is not None:
-                if not await self._policy.approve(name, {**arguments, **pending}, self._confirm):
+                external = str(pending.get(EXTERNAL_LINK, ""))
+                already_allowed = bool(external) and self._intent.destination_allowed(external)
+                if not already_allowed and not await self._policy.approve(
+                    name, {**arguments, **pending}, self._confirm
+                ):
                     return Step(name, arguments, "DENEGADO: el usuario no ha confirmado esta acción", False)
+                self._intent.remember_destination(external)
                 output = await self._backend.call(name, {**sent, HUMAN_FLAG: True})
         except Exception as exc:  # noqa: BLE001
             return Step(name, arguments, f"ERROR: {type(exc).__name__}: {exc}", False)

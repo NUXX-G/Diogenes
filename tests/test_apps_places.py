@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,11 @@ from core.intent import IntentGate
 from core.mcp_client import McpTools
 from core.safety import ConfirmationPolicy
 from hands import server as hands_server
-from hands.apps import desktop, folders
+from hands.apps import desktop, folders, shortcuts
 from hands.apps.index import AppIndex
 from hands.apps.models import AppEntry
 from hands.apps.policy import LaunchPolicy
+from hands.apps.shortcuts import LinkTarget
 from tests.test_agent import FakeLLM, decir, llamar
 
 # --- carpetas conocidas ------------------------------------------------------------------------------------------
@@ -115,9 +117,138 @@ def test_ejecutables_y_scripts_piden_confirmacion(politica: LaunchPolicy, ext: s
     assert politica.requires_confirmation(file_entry(f"C:\\x\\COSA{ext.upper()}"), is_dir=lambda _p: False)
 
 
-@pytest.mark.parametrize("target", ["C:\\x\\foto.png", "C:\\x\\informe.docx", "C:\\x\\Brawlhalla.lnk", "C:\\x\\a.url"])
-def test_documentos_y_accesos_no_piden_confirmacion(politica: LaunchPolicy, target: str) -> None:
+@pytest.mark.parametrize("target", ["C:\\x\\foto.png", "C:\\x\\informe.docx", "C:\\x\\a.url"])
+def test_documentos_y_accesos_web_no_piden_confirmacion(politica: LaunchPolicy, target: str) -> None:
     assert not politica.requires_confirmation(file_entry(target), is_dir=lambda _p: False)
+
+
+# --- accesos .lnk: manda el destino ------------------------------------------------------------------------------
+
+
+def lnk_entry(source: str = "startmenu") -> AppEntry:
+    return AppEntry(f"{source}:x", "Cosa", source, "file", "C:\\x\\Cosa.lnk")
+
+
+def destino(*paths: str, arguments: str = "", shell_name: str = "", advertised: bool = False) -> Any:
+    link = LinkTarget(tuple(paths), shell_name, arguments, advertised)
+    return lambda _path: link
+
+
+@pytest.mark.parametrize("ext", [".bat", ".cmd", ".ps1", ".vbs", ".js", ".hta", ".reg", ".msi"])
+def test_lnk_a_un_script_pide_confirmacion_y_ensena_el_destino(politica: LaunchPolicy, ext: str) -> None:
+    review = politica.assess(lnk_entry(), read_link=destino(f"C:\\Temp\\malo{ext}"))
+    assert review.requires and review.target == f"C:\\Temp\\malo{ext}"
+
+
+def test_lnk_a_un_exe_del_menu_inicio_va_directo(politica: LaunchPolicy) -> None:
+    assert not politica.assess(lnk_entry(), read_link=destino("C:\\Program Files\\App\\app.exe")).requires
+
+
+def test_lnk_a_un_exe_con_argumentos_normales_va_directo(politica: LaunchPolicy) -> None:
+    leer = destino("C:\\Program Files\\Chrome\\chrome.exe", arguments="--profile-directory=Default")
+    assert not politica.assess(lnk_entry(), read_link=leer).requires
+
+
+def test_lnk_a_un_exe_desde_el_escritorio_pregunta(politica: LaunchPolicy) -> None:
+    review = politica.assess(lnk_entry("desktop"), read_link=destino("C:\\Users\\u\\Downloads\\raro.exe"))
+    assert review.requires and "menú Inicio" in review.reason
+
+
+def test_lnk_a_documento_o_carpeta_no_pregunta_desde_ningun_sitio(politica: LaunchPolicy) -> None:
+    for destino_real in ("C:\\x\\informe.docx", "C:\\Users\\u\\Proyectos"):
+        assert not politica.assess(lnk_entry("desktop"), read_link=destino(destino_real)).requires
+
+
+@pytest.mark.parametrize(
+    ("exe", "args"),
+    [
+        ("powershell.exe", "-File x.ps1"),
+        ("cmd.exe", "/c malo.bat"),
+        ("mshta.exe", "http://x"),
+        ("WScript.exe", "x.vbs"),
+    ],
+)
+def test_lnk_a_un_interprete_con_argumentos_es_un_script(politica: LaunchPolicy, exe: str, args: str) -> None:
+    review = politica.assess(lnk_entry(), read_link=destino(f"C:\\Windows\\System32\\{exe}", arguments=args))
+    assert review.requires and args in review.target
+
+
+def test_lnk_a_un_interprete_sin_argumentos_del_menu_inicio_va_directo(politica: LaunchPolicy) -> None:
+    assert not politica.assess(lnk_entry(), read_link=destino("C:\\Windows\\System32\\cmd.exe")).requires
+
+
+def test_si_cualquier_destino_del_lnk_es_un_script_pregunta(politica: LaunchPolicy) -> None:
+    leer = destino("C:\\Program Files\\App\\app.exe", shell_name="MALO.BAT")
+    assert politica.assess(lnk_entry(), read_link=leer).requires
+
+
+def test_lnk_ilegible_o_sin_destino_pregunta(politica: LaunchPolicy) -> None:
+    assert politica.assess(lnk_entry(), read_link=lambda _p: None).requires
+    assert politica.assess(lnk_entry("desktop"), read_link=destino()).requires
+    assert politica.assess(lnk_entry(), read_link=destino(arguments="/c algo")).requires
+
+
+def test_lnk_a_un_objeto_del_shell_en_el_menu_inicio_va_directo(politica: LaunchPolicy) -> None:
+    assert not politica.assess(lnk_entry(), read_link=destino()).requires  # Explorador de archivos, Panel de control
+
+
+def test_lnk_anunciado_de_windows_installer_va_directo(politica: LaunchPolicy) -> None:
+    assert not politica.assess(lnk_entry(), read_link=destino(advertised=True)).requires
+
+
+def _string(text: str) -> bytes:
+    return struct.pack("<H", len(text)) + text.encode("utf-16-le")
+
+
+def construir_lnk(path: str, arguments: str = "", relative: str = "") -> bytes:
+    """Un .lnk mínimo: cabecera, LinkInfo con ruta local y cadenas en Unicode."""
+    base = path.encode("cp1252") + b"\0"
+    info = struct.pack("<IIIIIII", 28 + len(base) + 1, 28, 1, 28, 28, 0, 28 + len(base)) + base + b"\0"
+    flags = 0x02 | 0x80 | (0x08 if relative else 0) | (0x20 if arguments else 0)
+    header = struct.pack("<I", 0x4C) + shortcuts.LINK_CLSID + struct.pack("<II", flags, 0) + b"\0" * (0x4C - 28)
+    strings = (_string(relative) if relative else b"") + (_string(arguments) if arguments else b"")
+    return header + info + strings + struct.pack("<I", 0)
+
+
+def test_parser_lee_ruta_y_argumentos_de_un_lnk() -> None:
+    link = shortcuts.parse(construir_lnk("C:\\Temp\\malo.bat", arguments="/q", relative="..\\Temp\\malo.bat"))
+    assert link is not None
+    assert link.paths == ("C:\\Temp\\malo.bat", "..\\Temp\\malo.bat") and link.arguments == "/q"
+
+
+@pytest.mark.parametrize("datos", [b"", b"x", b"no es un acceso directo" * 10, construir_lnk("C:\\a.exe")[:90]])
+def test_parser_devuelve_none_con_basura(datos: bytes) -> None:
+    assert shortcuts.parse(datos) is None
+
+
+def test_read_lee_del_disco_y_un_fichero_que_no_existe_es_none(tmp_path: Path) -> None:
+    acceso = tmp_path / "x.lnk"
+    acceso.write_bytes(construir_lnk("C:\\Temp\\malo.ps1"))
+    leido = shortcuts.read(str(acceso))
+    assert leido is not None and leido.paths == ("C:\\Temp\\malo.ps1",)
+    assert shortcuts.read(str(tmp_path / "no.lnk")) is None
+
+
+def test_los_interpretes_salen_del_example_si_el_json_real_no_los_trae(tmp_path: Path) -> None:
+    (tmp_path / "confirmaciones.json").write_text('{"ejecutables": {"extensiones": [".exe"]}}', encoding="utf-8")
+    ejemplo = Path("configuracion/confirmaciones.example.json").read_text(encoding="utf-8")
+    (tmp_path / "confirmaciones.example.json").write_text(ejemplo, encoding="utf-8")
+    politica_mixta = LaunchPolicy.load(tmp_path)
+    assert politica_mixta.extensions == {".exe"} and "powershell.exe" in politica_mixta.interpreters
+
+
+async def test_hands_lanza_tras_el_si_y_ensena_el_destino_real_del_lnk(tmp_path: Path) -> None:
+    acceso = tmp_path / "Limpiar.lnk"
+    acceso.write_bytes(construir_lnk("C:\\Temp\\limpiar.bat"))
+    index = AppIndex()
+    index.replace([AppEntry("desktop:limpiar", "Limpiar", "desktop", "file", str(acceso))])
+    lanzadas: list[AppEntry] = []
+    async with Client(hands_server.build_server(index, launch=lanzadas.append)) as client:
+        res = (await client.call_tool("apps.launch", {"id": "desktop:limpiar"})).structured_content
+        assert res is not None and res["requiere_confirmacion"] is True and "limpiar.bat" in res["objetivo"]
+        assert lanzadas == []
+        await client.call_tool("apps.launch", {"id": "desktop:limpiar", "confirmado": True})
+    assert [e.id for e in lanzadas] == ["desktop:limpiar"]
 
 
 def test_una_carpeta_llamada_como_un_exe_no_es_un_exe(politica: LaunchPolicy) -> None:
