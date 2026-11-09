@@ -117,6 +117,12 @@ class PlaywrightPage:
         except Exception:  # noqa: BLE001
             return False
 
+    async def href(self, ref: str) -> str:
+        """Destino absoluto del enlace que contiene al elemento, leído del DOM en este momento."""
+        page = await self._live()
+        script = "e => { const a = e.closest('a[href]'); return a ? a.href : ''; }"
+        return str(await page.locator(f"aria-ref={ref}").evaluate(script, timeout=3_000))
+
     async def back(self) -> None:
         page = await self._live()
         await page.go_back(wait_until="domcontentloaded", timeout=10_000)

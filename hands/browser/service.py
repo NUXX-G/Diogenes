@@ -15,10 +15,11 @@ import hashlib
 import re
 import time
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from hands.browser import snapshot
 from hands.browser.rules import BrowserRules
+from hands.web.domains import host_of, registrable
 
 STOP = "Me paro aquí y te lo paso a ti: no relleno contraseñas ni datos de pago, ni completo compras."
 UNKNOWN_REF = "ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista."
@@ -36,6 +37,7 @@ class BrowserPage(Protocol):
     async def fill(self, ref: str, text: str, enter: bool) -> None: ...
     async def is_sensitive(self, ref: str) -> bool: ...
     async def is_multiline(self, ref: str) -> bool: ...
+    async def href(self, ref: str) -> str: ...
     async def back(self) -> None: ...
 
 
@@ -138,14 +140,17 @@ class BrowserService:
             return {"ok": False, "mensaje": UNKNOWN_REF.format(ref=ref)}
         if self._rules.payment_term(node.role, node.name):
             return {"ok": False, "parar": True, "mensaje": STOP}
+        page = await self._provider.page()
+        before = (await page.current())[0]
         if not confirmado:
             verb = self._rules.irreversible_term(node.role, node.name)
             if verb:
                 return _confirmation("browser.click", ref, node.name, f"acción irreversible ({verb})")
             if self._form_dirty and node.role == "button":
                 return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
-        page = await self._provider.page()
-        before = (await page.current())[0]
+            if external := await self._external_link(page, node, before):
+                motivo = f"el enlace lleva a otro dominio ({registrable(host_of(external))})"
+                return {**_confirmation("browser.click", ref, external, motivo), "destino_externo": external}
         seen_before = self._digest
         closed = ""
         try:
@@ -181,6 +186,19 @@ class BrowserService:
             "criterio": self._rules.order_criteria_of(node.role, node.name),
             **seen,
         }
+
+    @staticmethod
+    async def _external_link(page: BrowserPage, node: snapshot.Node, here: str) -> str:
+        """URL absoluta del enlace si lleva a otro dominio, o ''. Manda el href vivo: el del snapshot puede haber cambiado."""
+        try:
+            href = await page.href(node.ref)
+        except Exception:  # noqa: BLE001
+            href = ""
+        target = urljoin(here, href or node.href)
+        here_host, target_host = host_of(here), host_of(target)
+        if not here_host or not target_host or registrable(here_host) == registrable(target_host):
+            return ""
+        return target
 
     async def type(self, ref: str, text: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)

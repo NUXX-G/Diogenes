@@ -8,7 +8,7 @@ Qué cuenta como pedido por el usuario (nunca lo que escribe el modelo ni lo que
 - el texto del turno actual, y el de la petición original si el usuario está respondiendo a una lista de opciones
   ("el segundo", un nombre) o dice "sí" a una pregunta (entonces cuenta también la pregunta a la que dice sí);
 - dentro de una web que el usuario pidió, `browser.click` y `browser.type` van directos; abrir o navegar a OTRO dominio
-  que el usuario no nombró (p. ej. uno sacado del contenido de la página) pide confirmación.
+  que el usuario no nombró (p. ej. uno sacado del contenido de la página, o un enlace que lleva fuera) pide confirmación.
 
 Los verbos, las herramientas de acción y las palabras genéricas viven en `configuracion/confirmaciones.json`
 (sección `intencion`); aquí no hay listas escritas a mano.
@@ -17,18 +17,16 @@ Los verbos, las herramientas de acción y las palabras genéricas viven en `conf
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from hands.apps.models import normalize
+from hands.web.domains import host_of, registrable
 
 CONFIG_DIR = Path("configuracion")
 MAX_KNOWN_APPS = 500
-_SEGUNDO_NIVEL = frozenset({"co", "com", "org", "net", "gov", "edu", "ac"})  # example.co.uk → 3 etiquetas
 
 
 @dataclass(frozen=True)
@@ -76,27 +74,6 @@ class Verdict:
     allowed: bool
     target: str = ""  # a dónde va, para mostrárselo al usuario
     reason: str = ""
-
-
-def host_of(url: str) -> str:
-    """Host de una URL (también sin esquema). Vacío si no es http/https."""
-    text = url.strip()
-    if re.match(r"[a-z][a-z0-9+.-]*:(?!//|[0-9])", text, re.IGNORECASE):  # javascript:, mailto:… no son webs
-        return ""
-    if "://" not in text:
-        text = "https://" + text.lstrip("/")
-    parts = urlsplit(text)
-    return (parts.hostname or "").lower() if parts.scheme in ("http", "https") else ""
-
-
-def registrable(host: str) -> str:
-    """Dominio "propio" de un host: www.youtube.com → youtube.com; bbc.co.uk → bbc.co.uk."""
-    labels = [label for label in host.lower().strip(".").split(".") if label]
-    if len(labels) <= 2 or all(label.isdigit() for label in labels):
-        return ".".join(labels)
-    if len(labels[-1]) == 2 and labels[-2] in _SEGUNDO_NIVEL:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
 
 
 def _similar(a: str, b: str) -> bool:
@@ -162,7 +139,8 @@ class IntentGate:
         domain = registrable(host)
         if domain in self._mandate or host in self._mandate:
             return True
-        return _mentions(normalize(domain.split(".")[0]), self._mandate)
+        tokens = normalize(domain.split(".")[0]).split()  # "tienda-rara" son dos palabras al normalizar el mensaje
+        return bool(tokens) and all(_mentions(t, self._mandate) for t in tokens)
 
     def _names_site(self, site: str) -> bool:
         host = host_of(site)
@@ -195,6 +173,15 @@ class IntentGate:
         site = str(args.get("sitio", ""))
         ok = verbs_ok and self._names_site(site)
         return Verdict(ok, site, "" if ok else "esa web no la has nombrado en tu mensaje")
+
+    def destination_allowed(self, url: str) -> bool:
+        """¿Esa web la ha pedido el usuario, o ya la confirmó o se está trabajando en ella en esta conversación?"""
+        host = host_of(url)
+        return bool(host) and (registrable(host) in self._web_hosts or self._names_host(host))
+
+    def remember_destination(self, url: str) -> None:
+        if host := host_of(url):
+            self._web_hosts.add(registrable(host))
 
     def observe(self, tool: str, args: dict[str, Any], output: str) -> None:
         """Aprende de lo que se ejecutó: qué apps existen (para saber su nombre) y en qué webs se está trabajando."""

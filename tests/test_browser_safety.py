@@ -439,6 +439,112 @@ async def test_solo_la_primera_accion_del_navegador_por_respuesta_se_ejecuta() -
     assert clics(page) == [("click", "e3")]
 
 
+# --- enlaces que llevan a otro dominio --------------------------------------------------------------------
+
+
+ENLACES = """\
+- main:
+  - link "Interno" [ref=e1]:
+    - /url: /articulo
+  - link "Oferta" [ref=e2]:
+    - /url: https://tienda-rara.example/oferta
+  - link "Subdominio" [ref=e3]:
+    - /url: https://blog.ejemplo.es/x
+  - button "Ordenar" [ref=e4]
+"""
+
+
+def pagina_enlaces(hrefs: dict[str, str] | None = None) -> FakePage:
+    page = FakePage(ENLACES, navigates=False, hrefs=hrefs)
+    page.url, page.title = "https://www.ejemplo.es/inicio", "Ejemplo"
+    return page
+
+
+async def preparar_enlaces(page: FakePage) -> BrowserService:
+    svc = BrowserService(Provider(page), RULES)
+    await svc.snapshot()
+    return svc
+
+
+async def test_enlace_a_otro_dominio_no_se_pulsa_y_ensena_el_destino() -> None:
+    page = pagina_enlaces()
+    res = await (await preparar_enlaces(page)).click("e2")
+    assert res["requiere_confirmacion"] is True
+    assert res["destino_externo"] == "https://tienda-rara.example/oferta"
+    assert res["objetivo"] == "https://tienda-rara.example/oferta" and "tienda-rara.example" in res["motivo"]
+    assert clics(page) == []
+
+
+async def test_enlace_interno_subdominio_y_boton_van_directos() -> None:
+    page = pagina_enlaces()
+    svc = await preparar_enlaces(page)
+    for ref in ("e1", "e3", "e4"):
+        assert (await svc.click(ref))["ok"] is True
+    assert [c[1] for c in clics(page)] == ["e1", "e3", "e4"]
+
+
+async def test_manda_el_href_vivo_aunque_el_snapshot_dijera_otra_cosa() -> None:
+    page = pagina_enlaces(hrefs={"e1": "https://evil.example/robo"})  # la página cambió el enlace tras el snapshot
+    res = await (await preparar_enlaces(page)).click("e1")
+    assert res["destino_externo"] == "https://evil.example/robo" and clics(page) == []
+
+
+async def test_un_elemento_que_envuelve_un_enlace_externo_tambien_cuenta() -> None:
+    page = pagina_enlaces(hrefs={"e4": "https://evil.example/"})  # botón dentro de un <a>
+    assert (await (await preparar_enlaces(page)).click("e4"))["requiere_confirmacion"] is True
+
+
+async def test_sin_poder_leer_el_dom_se_usa_el_href_del_snapshot() -> None:
+    class SinDom(FakePage):
+        async def href(self, ref: str) -> str:
+            raise RuntimeError("elemento desaparecido")
+
+    page = SinDom(ENLACES, navigates=False)
+    page.url = "https://www.ejemplo.es/"
+    assert (await (await preparar_enlaces(page)).click("e2"))["requiere_confirmacion"] is True
+
+
+async def test_enlace_externo_con_confirmado_se_pulsa() -> None:
+    page = pagina_enlaces()
+    assert (await (await preparar_enlaces(page)).click("e2", confirmado=True))["ok"] is True
+    assert clics(page) == [("click", "e2")]
+
+
+async def clic_en_agente(pedido: str, respuesta: bool, *refs: str) -> tuple[FakePage, list[dict[str, Any]]]:
+    page = pagina_enlaces()
+    svc = BrowserService(Provider(page), RULES)
+    preguntas: list[dict[str, Any]] = []
+
+    async def confirm(_tool: str, args: dict[str, Any]) -> bool:
+        preguntas.append(args)
+        return respuesta
+
+    guion = [
+        llamar("browser_snapshot"),
+        *(llamar("browser_click", ref=r) for r in refs),
+        decir("La página sigue igual."),
+    ]
+    async with Client(build_server(AppIndex(), browser=svc)) as client:
+        await Agent(FakeLLM(*guion), McpTools(client), policy=POLICY, intent=web_pedida(), confirm=confirm).run(pedido)
+    return page, preguntas
+
+
+async def test_agente_pregunta_por_el_enlace_externo_y_el_no_se_respeta() -> None:
+    page, preguntas = await clic_en_agente("mira la página", False, "e2")
+    assert clics(page) == []
+    assert preguntas[0]["objetivo"] == "https://tienda-rara.example/oferta"
+
+
+async def test_agente_tras_el_si_no_vuelve_a_preguntar_por_ese_dominio() -> None:
+    page, preguntas = await clic_en_agente("mira la página", True, "e2", "e2")
+    assert len(preguntas) == 1 and clics(page) == [("click", "e2"), ("click", "e2")]
+
+
+async def test_agente_si_el_usuario_nombro_ese_dominio_no_pregunta() -> None:
+    page, preguntas = await clic_en_agente("entra en tienda-rara.example desde el enlace", False, "e2")
+    assert preguntas == [] and clics(page) == [("click", "e2")]
+
+
 # --- los refs de Playwright mueren con cada aria_snapshot nuevo ---------------------------------------
 
 

@@ -159,12 +159,13 @@ def build_server(
             entry = index.get(id)
             if entry is None:
                 return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
-            if not confirmado and policy.requires_confirmation(entry):
+            review = policy.assess(entry)
+            if not confirmado and review.requires:
                 return {
                     "ok": False,
                     "requiere_confirmacion": True,
-                    "objetivo": f"{entry.name} ({entry.target})",
-                    "motivo": "es un ejecutable o script: Windows lo ejecutaría con tus permisos",
+                    "objetivo": f"{entry.name} ({review.target})",
+                    "motivo": review.reason,
                 }
             launch(entry)
             return {"ok": True, "mensaje": f"Lanzado {entry.name}"}
