@@ -332,3 +332,63 @@ async def test_las_herramientas_de_cierre_solo_existen_si_hay_closer() -> None:
 def test_forzar_el_cierre_pide_confirmacion_aunque_el_json_del_usuario_no_lo_liste() -> None:
     assert ConfirmationPolicy([]).requires("apps.force_close")
     assert not ConfirmationPolicy([]).requires("apps.close")
+
+
+# --- carpetas: ventanas del Explorador, nunca el proceso ----------------------------------------------------------
+
+EXPLORER = r"C:\Windows\explorer.exe"
+DESCARGAS = AppEntry("carpetas:e029fa60", "Descargas", "carpetas", "file", r"C:\Users\yo\Downloads")
+
+
+def carpeta(hwnd: int, titulo: str, clase: str = "CabinetWClass", pid: int = 900) -> Win:
+    return Win(hwnd, pid, titulo, EXPLORER, clase)
+
+
+def test_cierra_descargas_con_wm_close_a_esa_ventana_y_no_dice_proceso_protegido() -> None:
+    backend = FakeWindows(carpeta(10, "Descargas"), carpeta(11, "Documentos"), bloc())
+    result = closer(backend).close(DESCARGAS, confirmed=False, named=True)
+    assert result["ok"] is True and result["cerrada"] is True
+    assert backend.cerradas == [10]  # solo la ventana de Descargas
+    assert backend.terminados == []  # el proceso del Explorador no se toca
+    assert {w.hwnd for w in backend.windows} == {11, 100}
+
+
+def test_la_barra_de_tareas_y_el_escritorio_no_son_ventanas_de_carpeta() -> None:
+    backend = FakeWindows(carpeta(1, "Descargas", clase="Shell_TrayWnd"), carpeta(2, "Descargas", clase="Progman"))
+    result = closer(backend).close(DESCARGAS, confirmed=False, named=True)
+    assert result["ok"] is False and "no está abierta" in result["mensaje"]
+    assert backend.cerradas == []
+
+
+def test_el_nombre_ingles_de_una_carpeta_encuentra_la_ventana_en_espanol() -> None:
+    downloads = AppEntry("carpetas:aaaa", "Downloads", "carpetas", "file", r"C:\Users\yo\Downloads")
+    backend = FakeWindows(carpeta(10, "Descargas"))
+    assert closer(backend).close(downloads, confirmed=False, named=True)["cerrada"] is True
+
+
+def test_una_carpeta_propuesta_por_el_modelo_pide_confirmacion_como_cualquier_app() -> None:
+    backend = FakeWindows(carpeta(10, "Descargas"))
+    result = closer(backend).close(DESCARGAS, confirmed=False, named=False)
+    assert result["requiere_confirmacion"] is True and backend.cerradas == []
+
+
+def test_forzar_el_cierre_de_una_carpeta_se_niega_y_no_termina_el_explorador() -> None:
+    backend = FakeWindows(carpeta(10, "Descargas", pid=900))
+    closer(backend).close(DESCARGAS, confirmed=True)
+    result = closer(backend).force_close(DESCARGAS)
+    assert result["ok"] is False and "Explorador" in result["mensaje"]
+    assert backend.terminados == []
+
+
+def test_una_carpeta_del_escritorio_detectada_por_ser_directorio_tambien_cierra_solo_la_ventana() -> None:
+    mia = AppEntry("desktop:bbbb", "Carpeta Diogenes", "desktop", "file", r"C:\Users\yo\Desktop\Carpeta Diogenes")
+    backend = FakeWindows(carpeta(20, "Carpeta Diogenes"))
+    result = AppCloser(backend, CONFIG, sleep=lambda _s: None, is_dir=lambda _p: True).close(mia, False, named=True)
+    assert result["cerrada"] is True and backend.cerradas == [20]
+
+
+def test_el_proceso_del_explorador_sigue_protegido_para_otras_apps() -> None:
+    """Una app que no es carpeta y casa con una ventana del Explorador sigue sin poder cerrarse."""
+    otra = AppEntry("startapps:zzz", "Descargas Rapidas", "startapps", "shell", "x!y")
+    backend = FakeWindows(Win(5, 900, "Descargas Rapidas", EXPLORER))
+    assert closer(backend).close(otra, confirmed=True)["parar"] is True

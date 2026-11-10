@@ -23,6 +23,7 @@ class Win:
     pid: int
     title: str
     exe: str  # ruta completa del ejecutable, o "" si no se pudo leer
+    cls: str = ""  # clase de la ventana ("CabinetWClass" = una carpeta del Explorador)
 
     @property
     def exe_name(self) -> str:
@@ -59,6 +60,7 @@ class WinBackend:
         u.GetWindow.restype = wintypes.HWND
         u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -98,7 +100,9 @@ class WinBackend:
             u.GetWindowTextW(hwnd, buf, length + 1)
             pid = self._wt.DWORD()
             u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            found.append(Win(int(hwnd), pid.value, buf.value, self._exe_of(pid.value)))
+            name = ctypes.create_unicode_buffer(256)
+            u.GetClassNameW(hwnd, name, 256)
+            found.append(Win(int(hwnd), pid.value, buf.value, self._exe_of(pid.value), name.value))
             return True
 
         u.EnumWindows(self._proc_type(visit), 0)

@@ -6,6 +6,8 @@
 - `force_close` termina el proceso. Solo se acepta si antes se intentó el cierre suave de ese mismo proceso y la app sigue
   abierta; la confirmación (distinta, y siempre) la impone el agente porque `apps.force_close` está en la lista de
   herramientas irreversibles de `configuracion/confirmaciones.json`.
+- Las carpetas (Descargas, Documentos…) son ventanas de `explorer.exe`, que es un proceso protegido: se cierra solo esa
+  ventana (WM_CLOSE a su hwnd), nunca el proceso, y `apps.force_close` se niega a terminarlo.
 - Hay procesos que nunca se cierran (sección `cierre.procesos_protegidos`), además de los de Diogenes mismo y el
   navegador de Diogenes mientras esté abierto.
 """
@@ -22,6 +24,8 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from hands.apps.folders import SOURCE as FOLDERS_SOURCE
+from hands.apps.folders import sibling_names
 from hands.apps.models import AppEntry, normalize
 from hands.apps.registry import SOURCE as APP_PATHS_SOURCE
 from hands.system.windows import Win, WindowBackend
@@ -29,6 +33,8 @@ from hands.system.windows import Win, WindowBackend
 CONFIG_DIR = Path("configuracion")
 SOFT_MEMORY_SECONDS = 15 * 60  # cuánto tiempo vale "ya intenté cerrarla suavemente" para poder forzar
 MIN_TITLE_SCORE = 90.0
+EXPLORER = "explorer.exe"
+FOLDER_WINDOW_CLASS = "CabinetWClass"  # las ventanas de carpeta del Explorador; no la barra de tareas ni el escritorio
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,29 @@ def matches(entry: AppEntry, win: Win) -> bool:
     return False
 
 
+def is_folder(entry: AppEntry, is_dir: Callable[[str], bool] = lambda p: Path(p).is_dir()) -> bool:
+    """Una carpeta (conocida o del escritorio): no es un proceso, es una ventana del Explorador."""
+    if entry.launch_kind != "file":
+        return False
+    return entry.source == FOLDERS_SOURCE or is_dir(entry.target)
+
+
+def is_folder_window(win: Win) -> bool:
+    return win.exe_name == EXPLORER and win.cls == FOLDER_WINDOW_CLASS
+
+
+def folder_windows(entry: AppEntry, windows: list[Win]) -> list[Win]:
+    """Ventanas de carpeta del Explorador cuyo título es el de esa carpeta (el Explorador titula con su nombre)."""
+    names = {
+        normalize(n) for n in (entry.name, Path(entry.target).name, *entry.aliases, *sibling_names(entry.name))
+    } - {""}
+    return [
+        w
+        for w in windows
+        if is_folder_window(w) and any(fuzz.ratio(n, normalize(w.title)) >= MIN_TITLE_SCORE for n in names)
+    ]
+
+
 class AppCloser:
     def __init__(
         self,
@@ -82,19 +111,26 @@ class AppCloser:
         config: CloseConfig,
         protected_pids: Callable[[], set[int]] = lambda: set(),
         sleep: Callable[[float], None] = time.sleep,
+        is_dir: Callable[[str], bool] = lambda p: Path(p).is_dir(),
     ) -> None:
         self._backend = backend
         self._config = config
         self._extra_protected = protected_pids
         self._sleep = sleep
+        self._is_dir = is_dir
         self._soft_tried: dict[int, float] = {}
 
     def _protected(self, win: Win) -> bool:
         own = {os.getpid(), os.getppid()}
+        if is_folder_window(win):
+            return win.pid in own  # una carpeta es solo una ventana: cerrarla no toca el proceso del Explorador
         return win.exe_name in self._config.protected or win.pid in own or win.pid in self._extra_protected()
 
     def _windows_of(self, entry: AppEntry) -> list[Win]:
-        return [w for w in self._backend.list_windows() if matches(entry, w)]
+        windows = self._backend.list_windows()
+        if is_folder(entry, self._is_dir):
+            return folder_windows(entry, windows)
+        return [w for w in windows if matches(entry, w)]
 
     def _description(self, wins: list[Win]) -> str:
         exes = sorted({w.exe_name or f"pid {w.pid}" for w in wins})
@@ -163,6 +199,13 @@ class AppCloser:
             self._sleep(0.25)
 
     def force_close(self, entry: AppEntry) -> dict[str, Any]:
+        if is_folder(entry, self._is_dir):
+            return {
+                "ok": False,
+                "parar": True,
+                "mensaje": f"{entry.name} es una carpeta: es una ventana del Explorador y forzarla mataría el Explorador. "
+                "Ciérrala con apps.close.",
+            }
         wins = self._windows_of(entry)
         if refusal := self._refusal(entry, wins):
             return refusal

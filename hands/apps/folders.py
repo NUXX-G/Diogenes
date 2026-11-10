@@ -11,7 +11,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from hands.apps.models import AppEntry, short_id
+from hands.apps.models import AppEntry, normalize, short_id
 
 SOURCE = "carpetas"
 USER_SHELL_FOLDERS_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
@@ -27,6 +27,17 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "desktop": ("Escritorio", "Desktop"),
 }
 RECYCLE_ALIASES = ("Papelera", "Papelera de reciclaje", "Recycle Bin")
+
+
+def sibling_names(name: str) -> tuple[str, ...]:
+    """Todos los nombres con que se conoce una carpeta conocida (Downloads → Descargas, Downloads): el Explorador
+    titula su ventana con el nombre del idioma de Windows, que no tiene por qué ser el que se pidió."""
+    wanted = normalize(name)
+    for group in (*ALIASES.values(), RECYCLE_ALIASES):
+        if wanted in {normalize(n) for n in group}:
+            return group
+    return ()
+
 
 # nombre del valor en `User Shell Folders` (Downloads solo tiene GUID)
 _REGISTRY_VALUES = {
