@@ -38,3 +38,8 @@ def test_el_prompt_manda_a_forzar_el_cierre_sin_preguntar_en_texto() -> None:
     from core.agent import SYSTEM_PROMPT
 
     assert "apps_force_close" in SYSTEM_PROMPT and "NO preguntes en texto" in SYSTEM_PROMPT
+
+
+def test_el_prompt_prefiere_media_control_y_limita_lo_que_se_puede_decir_tras_media_key() -> None:
+    assert "media_control" in SYSTEM_PROMPT and "media_sessions" in SYSTEM_PROMPT
+    assert "he pulsado X" in SYSTEM_PROMPT and "no hay ningún vídeo" in SYSTEM_PROMPT

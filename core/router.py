@@ -16,14 +16,15 @@ from hands.apps.models import normalize
 CONFIG_DIR = Path("configuracion")
 MEDIA_TOOL = "media.key"
 
+# Solo se puede decir lo que se hizo (pulsar la tecla), no el efecto: nadie ha comprobado si suena o está en pausa.
 ANSWERS = {
-    "play_pausa": "Hecho: play/pausa.",
-    "siguiente": "Siguiente.",
-    "anterior": "Anterior.",
-    "parar": "Parado.",
-    "subir_volumen": "Volumen arriba.",
-    "bajar_volumen": "Volumen abajo.",
-    "silencio": "Silencio.",
+    "play_pausa": "He pulsado play/pausa.",
+    "siguiente": "He pulsado siguiente.",
+    "anterior": "He pulsado anterior.",
+    "parar": "He pulsado parar.",
+    "subir_volumen": "He pulsado subir volumen.",
+    "bajar_volumen": "He pulsado bajar volumen.",
+    "silencio": "He pulsado silencio.",
 }
 
 

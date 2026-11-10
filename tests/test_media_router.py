@@ -135,7 +135,7 @@ async def test_un_atajo_no_llama_al_llm_y_responde_rapido() -> None:
     resultado = await agent.run("Diogenes, sube el volumen")
     assert time.monotonic() - inicio < 0.2
     assert backend.calls == [("media.key", {"tecla": "subir_volumen", "veces": 5})]
-    assert llm.seen == [] and resultado.answer == "Volumen arriba."
+    assert llm.seen == [] and resultado.answer == "He pulsado subir volumen."
     assert [s.tool for s in pasos] == ["media.key"] and resultado.steps[0].ok
 
 
@@ -183,4 +183,4 @@ async def test_extremo_a_extremo_con_hands_en_proceso() -> None:
     sender = FakeSender()
     async with Client(hands_server.build_server(AppIndex(), media=Media(sender))) as client:
         resultado = await Agent(FakeLLM(), McpTools(client), policy=ConfirmationPolicy([])).run("siguiente canción")
-    assert sender.pulsadas == [0xB0] and resultado.answer == "Siguiente."
+    assert sender.pulsadas == [0xB0] and resultado.answer == "He pulsado siguiente."

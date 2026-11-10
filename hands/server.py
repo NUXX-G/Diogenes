@@ -32,6 +32,7 @@ from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.system.closer import AppCloser, CloseConfig
 from hands.system.media import Media, WinKeySender
+from hands.system.sessions import Sessions, WinrtBackend
 from hands.system.windows import WinBackend
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
@@ -80,6 +81,7 @@ def build_server(
     browser: BrowserService | None = None,
     closer: AppCloser | None = None,
     media: Media | None = None,
+    sessions: Sessions | None = None,
     launch_policy: LaunchPolicy | None = None,
     ready_timeout: float = READY_TIMEOUT_SECONDS,
 ) -> MCPServer:
@@ -215,6 +217,33 @@ def build_server(
         )
         async def media_key(tecla: str, veces: int = 1) -> dict[str, Any]:
             return await audited("media.key", {"tecla": tecla, "veces": veces}, lambda: _call(media.key, tecla, veces))
+
+    if sessions is not None:
+
+        @server.tool(
+            name="media.sessions",
+            description=(
+                "Lista lo que Windows sabe que suena o está en pausa: app, título, artista y estado de cada sesión "
+                "multimedia (Spotify, el navegador, también en incógnito...). Úsala para saber qué hay o para elegir "
+                "una sesión; si dice disponible=false, usa media_key y di solo que has pulsado la tecla."
+            ),
+        )
+        async def media_sessions() -> dict[str, Any]:
+            return await audited("media.sessions", {}, sessions.listing)
+
+        @server.tool(
+            name="media.control",
+            description=(
+                "Actúa sobre una sesión multimedia y COMPRUEBA el estado después: accion = pausa, play, play_pausa, "
+                "siguiente, anterior o parar. 'sesion' es el id de media_sessions o parte del nombre de la app o del "
+                "título; vacía, actúa sobre la que suena (o la única que haya). Si no hay API, pulsa la tecla y dice "
+                "solo eso. Di únicamente lo que devuelve (verificado=true/false)."
+            ),
+        )
+        async def media_control(accion: str, sesion: str = "") -> dict[str, Any]:
+            return await audited(
+                "media.control", {"accion": accion, "sesion": sesion}, lambda: sessions.control(sesion, accion)
+            )
 
     if closer is not None:
 
@@ -432,7 +461,10 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
     )
     closer = _build_closer(session) if sys.platform == "win32" else None
     media = Media(WinKeySender()) if sys.platform == "win32" else None
-    server = build_server(index, actions=actions, web=web, browser=browser, closer=closer, media=media)
+    sessions = Sessions(WinrtBackend(), press_key=media.key) if media is not None else None
+    server = build_server(
+        index, actions=actions, web=web, browser=browser, closer=closer, media=media, sessions=sessions
+    )
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index, cache))
     try:

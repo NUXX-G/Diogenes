@@ -32,7 +32,10 @@ devuelto. Nunca inventes ids.
   · ganador_claro=false: pregunta cuál quiere, mostrando solo las "opciones" numeradas (máximo 3), y espera su \
 respuesta. Si responde "el primero", "la segunda", un nombre o "sí", usa esa opción sin volver a buscar ni preguntar.
   · sin resultados: dilo; no abras otra cosa por aproximación.
-- Para controlar lo que está sonando o reproduciéndose (pausar, reanudar, siguiente, anterior, parar, subir o bajar el volumen, silenciar), aunque la frase sea larga ("pausa el vídeo que tengo en incógnito", "pon en pausa la música de YouTube", "sube un poco el volumen"): llama a media_key con la tecla (play_pausa, siguiente, anterior, parar, subir_volumen, bajar_volumen, silencio) y veces si hace falta repetirla. Actúa sobre lo que suene, en la ventana o pestaña que sea (también en incógnito): NO abras ni busques ninguna app, web ni ventana para eso, y no preguntes dónde suena. Si no se oye nada, dilo tras pulsarla.
+- Para controlar lo que está sonando o reproduciéndose (pausar, reanudar, siguiente, anterior, parar, subir o bajar el volumen, silenciar), aunque la frase sea larga ("pausa el vídeo que tengo en incógnito", "pon en pausa la música de YouTube", "sube un poco el volumen"): NO abras ni busques ninguna app, web ni ventana para eso, y no preguntes dónde suena. Actúa sobre lo que suene, en la ventana o pestaña que sea (también en incógnito).
+  · Si existe media_control: llámala con accion (pausa, play, play_pausa, siguiente, anterior, parar) y sesion vacía; comprueba el estado después y devuelve verificado=true/false. Usa media_sessions solo si te preguntan qué suena o hay varias sesiones.
+  · Si no existe o dice disponible=false: media_key con la tecla (play_pausa, siguiente, anterior, parar, subir_volumen, bajar_volumen, silencio) y veces si hace falta repetirla. Tras media_key SOLO puedes decir "he pulsado X": nunca "está sonando", "está en pausa" ni "no hay ningún vídeo", porque no lo has comprobado.
+  · Di únicamente lo que demuestra el resultado.
 - Para buscar algo dentro de una web ("busca en YouTube cómo hacer mochis"): web_site_search con el sitio y la \
 consulta, sin la palabra "busca" ni el nombre del sitio en la consulta. No inventes URLs.
 - La consulta de web_site_search es solo el TEMA (el nombre de un canal, de un producto, de un artículo), nunca \
@@ -395,6 +398,8 @@ VERIFYING_TOOLS = frozenset(
         "apps.search",
         "apps.close",
         "apps.force_close",
+        "media.sessions",
+        "media.control",
         "web.site_search",
         "web.open",
         "browser.open",
@@ -425,10 +430,47 @@ def _unchecked_absence(answer: str, steps: list[Step]) -> str | None:
     )
 
 
+# Estado de la reproducción ("está en pausa", "ya suena", "no hay ningún vídeo"): solo lo demuestra media_control
+# verificado o media_sessions, nunca haber pulsado una tecla.
+MEDIA_STATE_CLAIM = re.compile(
+    r"\best[aá] (?:sonando|reproduci[eé]ndose|en pausa|pausad[oa]|parad[oa]|silenciad[oa]|en silencio)\b|"
+    r"\b(?:se )?ha (?:pausado|parado|reanudado|silenciado)\b|\bsigue (?:sonando|en pausa)\b|\bya suena\b|"
+    r"\b(?:pausad[oa]|reanudad[oa]|silenciad[oa])\b|\bno (?:se )?(?:oye|escucha|suena)\b|\bno suena\b|"
+    r"\bno hay (?:nada|ning[uú]n[oa]?)\b[^.]{0,40}\b(?:sonando|reproduci\w+|v[ií]deo|m[uú]sica|canci[oó]n|audio)\b",
+    re.IGNORECASE,
+)
+
+
+def _media_state_known(steps: list[Step]) -> bool:
+    for step in steps:
+        data = _json_dict(step.result)
+        if not data or data.get("ok") is not True:
+            continue
+        if step.tool == "media.sessions" and data.get("disponible") is True:
+            return True
+        if step.tool == "media.control" and data.get("verificado") is True:
+            return True
+    return False
+
+
+def _unverified_media_claim(answer: str, steps: list[Step]) -> str | None:
+    """Tras pulsar una tecla multimedia solo se sabe que se pulsó: el estado de la reproducción no se afirma."""
+    pressed = [d for s in steps if s.tool in ("media.key", "media.control") and (d := _json_dict(s.result))]
+    pressed = [
+        d for d in pressed if d.get("verificado") is False and str(d.get("mensaje", "")).startswith("He pulsado")
+    ]
+    if not pressed or _media_state_known(steps) or not MEDIA_STATE_CLAIM.search(answer):
+        return None
+    done = str(pressed[-1]["mensaje"]).split(". No puedo")[0].split("; no puedo")[0].rstrip(".")
+    return f"{done}; no puedo comprobar si ha cambiado lo que suena, así que no sé si está sonando o en pausa."
+
+
 def _grounded(answer: str, steps: list[Step]) -> str:
     """El resumen final no puede afirmar lo que la última comprobación no confirma: ni un envío o "hecho", ni un
     superlativo ("el más barato") sin una ordenación de la web que lo garantice, ni que algo "no existe" sin haberlo
     buscado. Los nombres citados, tal cual."""
+    if (media := _unverified_media_claim(answer, steps)) is not None:
+        return media
     if (absence := _unchecked_absence(answer, steps)) is not None:
         return absence
     actions = [s for s in steps if s.tool in ACTION_TOOLS]

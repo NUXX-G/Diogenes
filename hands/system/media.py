@@ -91,4 +91,11 @@ class Media:
         times = max(1, min(int(veces), MAX_PRESSES))
         for _ in range(times):
             self._sender.press(VIRTUAL_KEYS[key])
-        return {"ok": True, "mensaje": f"{key} ×{times}", "tecla": key, "veces": times}
+        return {
+            "ok": True,
+            "mensaje": f"He pulsado {key} ×{times}. No puedo comprobar si ha cambiado lo que suena.",
+            "tecla": key,
+            "veces": times,
+            "verificado": False,
+            "aviso": f"Solo se ha pulsado la tecla: di «he pulsado {key}», nunca que algo suena, está en pausa o no hay nada.",
+        }
