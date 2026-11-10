@@ -32,3 +32,9 @@ async def test_frase_larga_de_pausa_llega_al_modelo_con_el_prompt_y_media_key_di
     assert "media_key" in llm.seen[0][0].content  # el prompt de sistema llega al modelo
     assert "media_key" in {t.name for t in llm.tools_seen[0]}  # y la herramienta está a su alcance
     assert [(s.tool, s.arguments, s.ok) for s in result.steps] == [("media.key", {"tecla": "play_pausa"}, True)]
+
+
+def test_el_prompt_manda_a_forzar_el_cierre_sin_preguntar_en_texto() -> None:
+    from core.agent import SYSTEM_PROMPT
+
+    assert "apps_force_close" in SYSTEM_PROMPT and "NO preguntes en texto" in SYSTEM_PROMPT

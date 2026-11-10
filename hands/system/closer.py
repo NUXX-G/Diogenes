@@ -197,6 +197,10 @@ class AppCloser:
                 f"Le he pedido a {entry.name} que se cierre, pero sigue abierta (quizá pregunta si guardar). "
                 "Forzar el cierre perdería los cambios sin guardar y necesita otra confirmación."
             ),
+            "siguiente": (
+                "Si el usuario pidió cerrarla, llama ahora a apps.force_close con el mismo id: pide su propia "
+                "confirmación. No le preguntes en texto si quiere forzarla."
+            ),
         }
 
     def _wait_until_closed(self, wins: list[Win]) -> list[Win]:

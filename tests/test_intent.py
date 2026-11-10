@@ -369,3 +369,48 @@ async def test_un_nombre_en_apps_close_que_no_dijiste_no_cuenta_como_pedido() ->
     llm = FakeLLM(llamar("apps_close", id="calculadora"), decir("hecho"))
     await agente(llm, backend).run("cierra el notepad")
     assert next(a for n, a in backend.calls if n == "apps.close")["nombrado"] is False
+
+
+# --- una sola confirmación por acción, con todos los motivos ------------------------------------------------------
+
+
+async def test_forzar_algo_que_no_pediste_pregunta_una_sola_vez_con_los_dos_motivos() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, names=(*TOOLS, "apps.force_close"))
+    preguntas = Preguntas(respuesta=True)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="bloc de notas"), llamar("apps_force_close", id="startapps:bloc"), decir("ok")
+    )
+    politica = ConfirmationPolicy(["apps.force_close"])
+    await Agent(llm, backend, policy=politica, intent=IntentGate.load(), confirm=preguntas).run(
+        "busca el bloc de notas"
+    )
+    assert len(preguntas.vistas) == 1
+    tool, args = preguntas.vistas[0]
+    assert tool == "apps.force_close" and args["destino"] == "Bloc de notas"
+    assert "no lo has pedido" in args["motivo"] and "cambios sin guardar" in args["motivo"]
+
+
+async def test_forzar_lo_que_pediste_cerrar_pregunta_una_vez_sin_motivos_de_intencion() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, names=(*TOOLS, "apps.force_close"))
+    preguntas = Preguntas(respuesta=True)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="bloc de notas"), llamar("apps_force_close", id="startapps:bloc"), decir("ok")
+    )
+    politica = ConfirmationPolicy(["apps.force_close"])
+    await Agent(llm, backend, policy=politica, intent=IntentGate.load(), confirm=preguntas).run(
+        "cierra el bloc de notas"
+    )
+    assert len(preguntas.vistas) == 1 and "destino" not in preguntas.vistas[0][1]
+    assert "apps.force_close" in llamadas(backend)
+
+
+async def test_el_cierre_suave_fallido_dice_al_modelo_que_fuerce_sin_preguntar_en_texto() -> None:
+    from hands.apps.models import AppEntry as Entry
+    from hands.system.closer import AppCloser
+    from tests.test_closer import CONFIG, FakeWindows, bloc
+
+    windows = FakeWindows(bloc(), ignora_cierre=True)
+    res = AppCloser(windows, CONFIG, sleep=lambda _s: None).close(
+        Entry("startapps:bloc", "Bloc de notas", "startapps", "shell", "x"), True
+    )
+    assert res["sigue_abierta"] is True and "apps.force_close" in res["siguiente"]
