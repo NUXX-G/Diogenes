@@ -341,7 +341,8 @@ DESCARGAS = AppEntry("carpetas:e029fa60", "Descargas", "carpetas", "file", r"C:\
 
 
 def carpeta(hwnd: int, titulo: str, clase: str = "CabinetWClass", pid: int = 900) -> Win:
-    return Win(hwnd, pid, titulo, EXPLORER, clase)
+    """Como Windows 11: el Explorador titula la ventana "<carpeta> - Explorador de archivos" (visto en un PC real)."""
+    return Win(hwnd, pid, f"{titulo} - Explorador de archivos", EXPLORER, clase)
 
 
 def test_cierra_descargas_con_wm_close_a_esa_ventana_y_no_dice_proceso_protegido() -> None:
@@ -392,3 +393,15 @@ def test_el_proceso_del_explorador_sigue_protegido_para_otras_apps() -> None:
     otra = AppEntry("startapps:zzz", "Descargas Rapidas", "startapps", "shell", "x!y")
     backend = FakeWindows(Win(5, 900, "Descargas Rapidas", EXPLORER))
     assert closer(backend).close(otra, confirmed=True)["parar"] is True
+
+
+def test_tambien_vale_el_titulo_sin_el_sufijo_del_explorador() -> None:
+    backend = FakeWindows(Win(10, 900, "Descargas", EXPLORER, "CabinetWClass"))
+    assert closer(backend).close(DESCARGAS, confirmed=False, named=True)["cerrada"] is True
+
+
+def test_una_carpeta_con_guion_en_el_nombre_se_reconoce() -> None:
+    mia = AppEntry("desktop:cccc", "Mis - Cosas", "desktop", "file", r"C:\Users\yo\Desktop\Mis - Cosas")
+    backend = FakeWindows(carpeta(30, "Mis - Cosas"))
+    result = AppCloser(backend, CONFIG, sleep=lambda _s: None, is_dir=lambda _p: True).close(mia, False, named=True)
+    assert result["cerrada"] is True

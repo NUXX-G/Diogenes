@@ -92,16 +92,19 @@ def is_folder_window(win: Win) -> bool:
     return win.exe_name == EXPLORER and win.cls == FOLDER_WINDOW_CLASS
 
 
+def _title_is(name: str, title: str) -> bool:
+    """El Explorador titula "Descargas - Explorador de archivos": se compara el título entero y sin el sufijo del
+    programa (lo que sigue al último " - ")."""
+    heads = {title, title.rsplit(" - ", 1)[0]}
+    return any(fuzz.ratio(name, normalize(head)) >= MIN_TITLE_SCORE for head in heads)
+
+
 def folder_windows(entry: AppEntry, windows: list[Win]) -> list[Win]:
     """Ventanas de carpeta del Explorador cuyo título es el de esa carpeta (el Explorador titula con su nombre)."""
     names = {
         normalize(n) for n in (entry.name, Path(entry.target).name, *entry.aliases, *sibling_names(entry.name))
     } - {""}
-    return [
-        w
-        for w in windows
-        if is_folder_window(w) and any(fuzz.ratio(n, normalize(w.title)) >= MIN_TITLE_SCORE for n in names)
-    ]
+    return [w for w in windows if is_folder_window(w) and any(_title_is(n, w.title) for n in names)]
 
 
 class AppCloser:
