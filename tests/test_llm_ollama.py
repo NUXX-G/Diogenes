@@ -79,3 +79,16 @@ async def test_ollama_apagado_da_error_legible() -> None:
 
     with pytest.raises(LLMError, match="¿Está arrancado"):
         await provider(handler).chat([], [])
+
+
+async def test_mantiene_el_modelo_cargado_30_minutos_por_defecto_y_es_configurable() -> None:
+    cuerpos: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cuerpos.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "hola"}})
+
+    await provider(handler).chat([Message("user", "hola")], [])
+    cliente = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await OllamaProvider("http://ollama.test/", "m", client=cliente, keep_alive="2h").chat([Message("user", "x")], [])
+    assert [c["keep_alive"] for c in cuerpos] == ["30m", "2h"]  # evita el arranque en frío de ~85 s en la CPU del aula

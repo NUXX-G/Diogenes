@@ -11,6 +11,8 @@ from core.llm.base import LLMError, LLMResponse, Message, ToolCall, ToolSpec
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3:4b-instruct"
+# Ollama descarga el modelo a los 5 min sin uso y recargarlo cuesta ~85 s en la CPU del aula: se mantiene más tiempo.
+DEFAULT_KEEP_ALIVE = "30m"
 
 
 def _message_to_wire(m: Message) -> dict[str, Any]:
@@ -45,11 +47,13 @@ class OllamaProvider:
         num_ctx: int = 8192,
         max_tokens: int = 512,
         timeout: float = 300.0,
+        keep_alive: str = DEFAULT_KEEP_ALIVE,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         # num_predict acota la generación: un bucle del modelo no puede quedarse horas (ni cientos de llamadas)
+        self._keep_alive = keep_alive
         self._options = {"temperature": temperature, "num_ctx": num_ctx, "num_predict": max_tokens}
         self._client = client or httpx.AsyncClient(timeout=timeout)
 
@@ -59,6 +63,7 @@ class OllamaProvider:
             "messages": [_message_to_wire(m) for m in messages],
             "stream": False,
             "think": False,
+            "keep_alive": self._keep_alive,
             "options": self._options,
         }
         if tools:

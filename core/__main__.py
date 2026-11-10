@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from core.agent import PANIC_TOOL, Agent, Step
 from core.hotkey import HotkeyListener, load_combo
-from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_MODEL, OllamaProvider
+from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, OllamaProvider
 from core.mcp_client import connect_hands
 from core.session import Session
 
@@ -54,6 +54,7 @@ async def amain() -> int:
     llm = OllamaProvider(
         os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
         os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
+        keep_alive=os.environ.get("DIOGENES_OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
     )
 
     async def read() -> str:
