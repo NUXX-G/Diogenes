@@ -205,6 +205,9 @@ Todo el overlay es opcional y se desactiva desde la bandeja del sistema.
 - No subas nunca `.env`, tokens, logs con datos personales, capturas ni modelos.
 - Ramas `feat/…` y `fix/…`, PR revisada por el otro integrante y commits pequeños en español que digan qué cambia y por qué.
 - No toques `docker-compose.yml` ni `docker/` desde este repo. Si el modo personal necesita algo del stack de clase, se propone en el repo de clase.
+- **Informes**: la carpeta `informes/` (no versionada) guarda los 3 últimos informes que se le dan a Yeray (`informe-N-tema.md`, del 1 más antiguo al 3 más reciente). Con uno nuevo se borra el 1, se renumera y el nuevo pasa a ser el 3; si cambia el mismo informe, se edita. Reglas en `informes/LEEME.md`.
+- **Este fichero es la memoria del repo**: cualquier instrucción nueva que deba seguir un Claude Code que llegue por primera vez se escribe aquí (no en chats ni en ficheros sueltos). No se crean otros resúmenes de estado: la hoja de ruta de arriba es el estado.
+- **PC de clase compartido** (Yeray): nada global y nada fuera del repo; avisar de archivos con secretos (`.env`). Usar siempre `UV_PROJECT_ENVIRONMENT=.venv314` y `--python C:\Python314\python.exe` (la política del centro bloquea el Python 3.12 de uv). Ejemplo: `uv run --python C:\Python314\python.exe pytest -q`.
 
 ## Comandos
 

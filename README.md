@@ -15,6 +15,23 @@ LLM ejecutado **en local**, accesible por **Telegram**, que consulta **Gmail y G
 - **Entrega:** 11 de diciembre
 - **Estado:** Fase 0 — definición
 
+## Modo personal (control del PC)
+
+Además del stack de clase, este repo tiene el **modo personal**: `diogenes-core` y `hands-mcp` en el anfitrión Windows, que controlan el ordenador con peticiones en lenguaje natural («ábreme Brawlhalla», «búscame en YouTube cómo hacer mochis»). Está **desactivado por defecto**: necesita `DIOGENES_MODE=personal` y un `HANDS_MCP_TOKEN` en el `.env` local.
+
+- **Hecho:** abrir apps, carpetas y archivos del escritorio; búsqueda en webs y navegador por CDP; cierre de apps (suave y forzado); teclas multimedia y atajos sin LLM; puerta de intención y confirmaciones para lo irreversible (ejecutables y scripts, `.lnk` por su destino, enlaces a otro dominio); botón del pánico `Ctrl+Alt+Esc` o `/parar`.
+- **Pendiente:** recetas aprendidas, voz, interfaz nativa (UIA), visión, overlay, wake word, Telegram desde el móvil, OCR de pantalla y nube opcional como planificador.
+- Todo el detalle (arquitectura, seguridad, hoja de ruta por fases y normas de trabajo) está en [`CLAUDE.md`](CLAUDE.md), que es la fuente de verdad del modo personal; la configuración, en [`configuracion/README.md`](configuracion/README.md).
+- El entregable de clase y este modo son **independientes**: el modo personal no cambia `docker-compose.yml` ni `docker/`.
+
+```powershell
+# En el PC de clase (Python 3.14 del sistema)
+$env:UV_PROJECT_ENVIRONMENT = ".venv314"; $py = "C:\Python314\python.exe"
+uv sync --python $py
+uv run --python $py python -m hands.server      # terminal 1
+uv run --python $py python -m core --texto      # terminal 2
+```
+
 > Este repo **nunca** contiene modelos, secretos, `.env` reales, tokens ni datos personales. Ver [Seguridad](#seguridad-reglas-del-repo).
 
 ---
