@@ -17,7 +17,7 @@ from hands.apps.models import AppEntry
 
 log = logging.getLogger(__name__)
 
-VERSION = 1
+VERSION = 2
 DEFAULT_PATH = Path("data/apps-index.json")
 DEFAULT_TTL_SECONDS = 10 * 60
 
@@ -39,7 +39,10 @@ class IndexCache:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             if data["version"] != VERSION or self._now() - float(data["guardado"]) > self._ttl:
                 return None
-            return [AppEntry(e["id"], e["name"], e["source"], e["launch_kind"], e["target"]) for e in data["entradas"]]
+            return [
+                AppEntry(e["id"], e["name"], e["source"], e["launch_kind"], e["target"], tuple(e.get("aliases", ())))
+                for e in data["entradas"]
+            ]
         except FileNotFoundError:
             return None
         except (OSError, ValueError, KeyError, TypeError):
@@ -51,7 +54,14 @@ class IndexCache:
             "version": VERSION,
             "guardado": self._now(),
             "entradas": [
-                {"id": e.id, "name": e.name, "source": e.source, "launch_kind": e.launch_kind, "target": e.target}
+                {
+                    "id": e.id,
+                    "name": e.name,
+                    "source": e.source,
+                    "launch_kind": e.launch_kind,
+                    "target": e.target,
+                    "aliases": list(e.aliases),
+                }
                 for e in entries
             ],
         }

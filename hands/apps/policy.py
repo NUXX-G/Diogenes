@@ -16,8 +16,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
-from hands.apps import shortcuts
+from hands.apps import shortcuts, signature
 from hands.apps.models import AppEntry
+from hands.apps.registry import SOURCE as APP_PATHS_SOURCE
 from hands.apps.startmenu import SOURCE as START_MENU_SOURCE
 
 CONFIG_DIR = Path("configuracion")
@@ -91,6 +92,7 @@ class LaunchPolicy:
         entry: AppEntry,
         is_dir: Callable[[str], bool] = _is_dir,
         read_link: Callable[[str], shortcuts.LinkTarget | None] = shortcuts.read,
+        is_system_app: Callable[[str], bool] = signature.is_trusted_system_app,
     ) -> Assessment:
         if entry.launch_kind != "file":
             return Assessment(False, entry.target)
@@ -98,6 +100,9 @@ class LaunchPolicy:
         if suffix == LINK_SUFFIX and suffix not in self.extensions:
             return self._assess_link(entry, read_link(entry.target))
         requires = suffix in self.extensions and not is_dir(entry.target)
+        if requires and entry.source == APP_PATHS_SOURCE and signature.in_system_dir(entry.target):
+            # Un .exe de App Paths dentro de System32/WindowsApps y firmado por Microsoft es una app del sistema
+            requires = not is_system_app(entry.target)
         return Assessment(requires, entry.target, DIRECT if requires else "")
 
     def requires_confirmation(
@@ -105,5 +110,6 @@ class LaunchPolicy:
         entry: AppEntry,
         is_dir: Callable[[str], bool] = _is_dir,
         read_link: Callable[[str], shortcuts.LinkTarget | None] = shortcuts.read,
+        is_system_app: Callable[[str], bool] = signature.is_trusted_system_app,
     ) -> bool:
-        return self.assess(entry, is_dir, read_link).requires
+        return self.assess(entry, is_dir, read_link, is_system_app).requires

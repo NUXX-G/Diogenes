@@ -63,14 +63,16 @@ def _stem(win: Win) -> str:
 
 def matches(entry: AppEntry, win: Win) -> bool:
     """¿Es esta ventana de esa app? Por el nombre del ejecutable o porque el título contiene el nombre de la app."""
-    name = normalize(entry.name)
-    if not name:
-        return False
-    stem = _stem(win)
-    if stem and fuzz.ratio(name, stem) >= MIN_TITLE_SCORE:
-        return True
-    title = normalize(win.title)
-    return len(name) >= 4 and fuzz.partial_ratio(name, title) >= MIN_TITLE_SCORE
+    stem, title = _stem(win), normalize(win.title)
+    for candidate in (entry.name, *entry.aliases):  # los alias son otros nombres de la app (p. ej. el del ejecutable)
+        name = normalize(candidate)
+        if not name:
+            continue
+        if stem and fuzz.ratio(name, stem) >= MIN_TITLE_SCORE:
+            return True
+        if len(name) >= 4 and fuzz.partial_ratio(name, title) >= MIN_TITLE_SCORE:
+            return True
+    return False
 
 
 class AppCloser:

@@ -10,7 +10,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from hands.apps import desktop, epic, folders, registry, startapps, startmenu, steam
+from hands.apps import desktop, epic, folders, reconcile, registry, startapps, startmenu, steam
 from hands.apps.models import AppEntry
 
 log = logging.getLogger(__name__)
@@ -77,4 +77,5 @@ def discover(powershell: Callable[[str], str] = run_powershell) -> list[AppEntry
 
     fuentes = list(_fuentes(powershell).items())
     with ThreadPoolExecutor(max_workers=len(fuentes)) as pool:
-        return [entry for found in pool.map(collect, fuentes) for entry in found]
+        entries = [entry for found in pool.map(collect, fuentes) for entry in found]
+    return reconcile.merge_app_paths(entries)
