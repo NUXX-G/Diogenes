@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 SALIR = frozenset({"salir", "exit", "quit"})
 PARAR = "/parar"
+PARAR_ALIAS = frozenset({PARAR, "/para"})  # "/para" es el mismo botón: se escribe a menudo
 NUEVO = "/nuevo"
 AFIRMA = frozenset({"s", "si", "sí", "y", "yes"})
 RELEASE_TIMEOUT_SECONDS = 5.0
@@ -111,7 +112,7 @@ class Session:
                 if not line:
                     continue
                 lowered = line.lower()
-                if lowered == PARAR:
+                if lowered in PARAR_ALIAS:
                     self.panic()
                 elif self._answer is not None and not self._answer.done():
                     self._answer.set_result(lowered in AFIRMA)

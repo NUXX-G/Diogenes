@@ -78,7 +78,7 @@ async def amain() -> int:
         hotkey = HotkeyListener(combo, lambda: loop.call_soon_threadsafe(session.panic))
         print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar o '/nuevo' para olvidar la conversación.")
         if hotkey.start():
-            print(f"Botón del pánico: {combo} o /parar.")
+            print(f"Botón del pánico: {combo} o /parar (también /para).")
         else:
             print(f"AVISO: no he podido registrar {combo} (¿lo usa otro programa?). Para cancelar, escribe /parar.")
         try:
