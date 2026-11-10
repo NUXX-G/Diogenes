@@ -382,9 +382,55 @@ def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
     )
 
 
+# "No se encontró", "no existe", "no hay X": afirmaciones de ausencia, que solo valen si algo las comprobó este turno.
+NOT_FOUND = re.compile(
+    r"\bno (?:se |lo |la |los |las )?(?:he |ha |han )?(?:encontrad[oa]s?|encontr[oó]|encuentr[oa]n?)\b|"
+    r"\bno (?:hay|existe[n]?|est[aá]n? (?:instalad|abiert|disponible)\w*)\b(?! (?:problema|duda|prisa|de qu[eé]))|"
+    r"\bno (?:aparece[n]?|veo)\b",
+    re.IGNORECASE,
+)
+# Herramientas cuyo resultado demuestra que algo está o no está (buscar una app, mirar una página, intentar cerrar).
+VERIFYING_TOOLS = frozenset(
+    {
+        "apps.search",
+        "apps.close",
+        "apps.force_close",
+        "web.site_search",
+        "web.open",
+        "browser.open",
+        "browser.snapshot",
+        "browser.click",
+        "browser.type",
+        "browser.current",
+        "browser.back",
+    }
+)
+
+
+def _verified(step: Step) -> bool:
+    """El resultado de la herramienta es una comprobación real: ni un fallo de transporte, ni una denegación, ni un bloqueo."""
+    if step.tool not in VERIFYING_TOOLS or step.result.startswith(("ERROR:", "DENEGADO")):
+        return False
+    data = _json_dict(step.result)
+    return not (data and data.get("bloqueado") is True)
+
+
+def _unchecked_absence(answer: str, steps: list[Step]) -> str | None:
+    """Dice que algo no existe o no se encontró sin haber llamado en este turno a la herramienta que lo comprueba."""
+    if not NOT_FOUND.search(answer) or any(_verified(s) for s in steps):
+        return None
+    return (
+        "No lo he comprobado: en este turno no he llamado a ninguna herramienta que lo verifique (apps_search, "
+        "browser_snapshot…), así que no puedo decir que no esté o que no exista. Dime si quieres que lo busque."
+    )
+
+
 def _grounded(answer: str, steps: list[Step]) -> str:
     """El resumen final no puede afirmar lo que la última comprobación no confirma: ni un envío o "hecho", ni un
-    superlativo ("el más barato") sin una ordenación de la web que lo garantice. Los nombres citados, tal cual."""
+    superlativo ("el más barato") sin una ordenación de la web que lo garantice, ni que algo "no existe" sin haberlo
+    buscado. Los nombres citados, tal cual."""
+    if (absence := _unchecked_absence(answer, steps)) is not None:
+        return absence
     actions = [s for s in steps if s.tool in ACTION_TOOLS]
     if actions and CLAIM.search(answer):
         failure = _honest_failure(actions[-1])
