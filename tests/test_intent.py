@@ -414,3 +414,87 @@ async def test_el_cierre_suave_fallido_dice_al_modelo_que_fuerce_sin_preguntar_e
         Entry("startapps:bloc", "Bloc de notas", "startapps", "shell", "x"), True
     )
     assert res["sigue_abierta"] is True and "apps.force_close" in res["siguiente"]
+
+
+# --- pronombres y referencias ("ciérralo", "eso", "la misma") ------------------------------------------------------
+
+BUSQUEDA_PAINT = json.dumps(
+    {"ok": True, "ganador_claro": True, "resultados": [{"id": "startapps:paint", "nombre": "Paint"}]}
+)
+
+
+def gate_tras_hablar_de_paint() -> IntentGate:
+    gate = IntentGate.load()
+    gate.begin_turn("abre paint")
+    gate.observe("apps.search", {"nombre": "paint"}, BUSQUEDA_PAINT)
+    gate.observe("apps.launch", {"id": "startapps:paint"}, json.dumps({"ok": True}))
+    return gate
+
+
+@pytest.mark.parametrize(
+    "frase", ["ciérralo", "ciérralo a la fuerza", "cierra eso", "cierra la misma", "ciérrala", "quítalo"]
+)
+def test_los_pronombres_se_resuelven_contra_la_ultima_app(frase: str) -> None:
+    gate = gate_tras_hablar_de_paint()
+    gate.begin_turn(frase)
+    verdict = gate.check("apps.close", {"id": "startapps:paint"})
+    assert verdict.allowed is (frase != "quítalo"), frase  # "quítalo" no es un verbo de cerrar de la configuración
+
+
+def test_ciérralo_a_la_fuerza_tras_paint_cuenta_como_pedido_de_forzar_paint() -> None:
+    gate = gate_tras_hablar_de_paint()
+    gate.begin_turn("ciérralo a la fuerza")
+    assert gate.check("apps.force_close", {"id": "startapps:paint"}).allowed is True
+
+
+def test_un_pronombre_no_da_permiso_para_otra_app() -> None:
+    gate = gate_tras_hablar_de_paint()
+    gate.observe("apps.search", {"nombre": "x"}, BUSQUEDA_CALC)
+    gate.begin_turn("ciérralo")
+    assert gate.check("apps.close", {"id": "startapps:calc"}).allowed is False
+
+
+def test_sin_pronombre_el_articulo_no_arrastra_la_ultima_app() -> None:
+    gate = gate_tras_hablar_de_paint()
+    gate.observe("apps.search", {"nombre": "x"}, BUSQUEDA_CALC)
+    gate.begin_turn("abre la calculadora de mi hermano")
+    assert gate.check("apps.launch", {"id": "startapps:paint"}).allowed is False
+
+
+def test_la_referencia_sin_nada_de_lo_que_hablar_no_permite_nada() -> None:
+    gate = IntentGate.load()
+    gate.begin_turn("ciérralo")
+    assert gate.check("apps.close", {"id": "startapps:paint"}).allowed is False
+
+
+def test_una_app_solo_vista_en_una_busqueda_sin_que_el_usuario_la_nombre_no_es_la_referencia() -> None:
+    gate = IntentGate.load()
+    gate.begin_turn("qué apps de dibujo tengo")
+    gate.observe("apps.search", {"nombre": "dibujo"}, BUSQUEDA_PAINT)
+    gate.begin_turn("ciérralo")
+    assert gate.check("apps.close", {"id": "startapps:paint"}).allowed is False
+
+
+def test_la_referencia_tambien_vale_para_una_web_de_la_que_se_hablaba() -> None:
+    gate = IntentGate.load()
+    gate.begin_turn("busca en youtube mochis")
+    gate.observe("web.site_search", {"sitio": "youtube"}, YOUTUBE)
+    gate.begin_turn("ábrelo otra vez")
+    assert gate.check("web.open", {"url": "https://www.youtube.com/"}).allowed is True
+
+
+async def test_ciérralo_tras_hablar_de_paint_en_el_agente_cierra_directo_sin_preguntar() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_PAINT}, names=TOOLS)
+    preguntas = Preguntas()
+    llm = FakeLLM(
+        llamar("apps_search", nombre="paint"),
+        llamar("apps_launch", id="startapps:paint"),
+        decir("Paint abierto."),
+        llamar("apps_close", id="startapps:paint"),
+        decir("Cerrado."),
+    )
+    agent = agente(llm, backend, preguntas)
+    await agent.run("abre paint")
+    await agent.run("ciérralo")
+    cierre = next(a for n, a in backend.calls if n == "apps.close")
+    assert cierre["nombrado"] is True and preguntas.vistas == []

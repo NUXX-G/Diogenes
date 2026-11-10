@@ -7,6 +7,9 @@ un correo o el nombre de una app que "ordenen" algo no consiguen que Diogenes lo
 Qué cuenta como pedido por el usuario (nunca lo que escribe el modelo ni lo que devuelve una herramienta):
 - el texto del turno actual, y el de la petición original si el usuario está respondiendo a una lista de opciones
   ("el segundo", un nombre) o dice "sí" a una pregunta (entonces cuenta también la pregunta a la que dice sí);
+- los pronombres y referencias ("ciérralo", "eso", "la misma", "ábrelo otra vez") se resuelven contra la última app o
+  web que el usuario nombró o que se ejecutó por su orden en la conversación: "ciérralo a la fuerza" tras hablar de
+  Paint cuenta como pedido de cerrar Paint;
 - dentro de una web que el usuario pidió, `browser.click` y `browser.type` van directos; abrir o navegar a OTRO dominio
   que el usuario no nombró (p. ej. uno sacado del contenido de la página, o un enlace que lleva fuera) pide confirmación.
 
@@ -28,6 +31,10 @@ from hands.web.domains import host_of, registrable
 
 CONFIG_DIR = Path("configuracion")
 MAX_KNOWN_APPS = 500
+PRONOUNS = frozenset(
+    {"eso", "esto", "ese", "esa", "este", "esta", "ello", "misma", "mismo"}
+)  # no "lo"/"la": también son artículos
+CLITICS = ("selo", "sela", "los", "las", "lo", "la")  # ciérralo, ábrelo, ciérrala, ponlos, dáselo...
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
 
 
@@ -107,6 +114,9 @@ class IntentGate:
         self._known_apps: dict[str, str] = {}
         self._web_hosts: set[str] = set()
         self._web_ok = False
+        self._referent: tuple[str, str] | None = (
+            None  # ("app" | "web", nombre o dominio) de lo último de lo que se habló
+        )
 
     @classmethod
     def load(cls, directory: Path = CONFIG_DIR) -> IntentGate:
@@ -117,10 +127,50 @@ class IntentGate:
         self._known_apps.clear()
         self._web_hosts.clear()
         self._web_ok = False
+        self._referent = None
 
     def begin_turn(self, user_text: str) -> None:
         """`user_text` es SOLO lo que el usuario escribió (más, si responde a una pregunta, la pregunta)."""
-        self._mandate = set(normalize(user_text).split())
+        words = normalize(user_text).split()
+        self._mandate = set(words)
+        self._remember_named_app(words)
+        if self._referent is not None and self._has_reference(words):
+            self._mandate |= self._referent_words()
+
+    def _is_verb_word(self, word: str) -> bool:
+        for roots in self._config.verbs.values():
+            for root in roots:
+                if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
+                    return True
+        return False
+
+    def _has_reference(self, words: list[str]) -> bool:
+        """¿Hay un pronombre ("eso", "la misma") o un verbo con pronombre pegado ("ciérralo", "ábrelo")?"""
+        for word in words:
+            if word in PRONOUNS:
+                return True
+            for clitic in CLITICS:
+                if word.endswith(clitic) and self._is_verb_word(word[: -len(clitic)]):
+                    return True
+        return False
+
+    def _referent_words(self) -> set[str]:
+        assert self._referent is not None
+        kind, text = self._referent
+        if kind == "app":
+            return set(normalize(text).split())
+        return {text, *normalize(text.split(".")[0]).split()}  # youtube.com → youtube.com y youtube
+
+    def _remember_named_app(self, words: list[str]) -> None:
+        """Si el mensaje nombra una app ya vista en la conversación, pasa a ser aquello de lo que se habla."""
+        latest = -1
+        for name in self._known_apps.values():
+            tokens = [t for t in normalize(name).split() if t not in self._config.generic_words] or normalize(
+                name
+            ).split()
+            positions = [i for i, w in enumerate(words) if any(_similar(t, w) for t in tokens)]
+            if positions and self._names_app(name) and max(positions) > latest:
+                latest, self._referent = max(positions), ("app", name)
 
     def _has_verb(self, groups: tuple[str, ...]) -> bool:
         for group in groups:
@@ -204,8 +254,15 @@ class IntentGate:
                 known = isinstance(item, dict) and item.get("id") and item.get("nombre")
                 if known and len(self._known_apps) < MAX_KNOWN_APPS:
                     self._known_apps[str(item["id"])] = str(item["nombre"])
+                    if self._names_app(str(item["nombre"])):  # la nombró el usuario en su mensaje
+                        self._referent = ("app", str(item["nombre"]))
             return
         rule = self._config.tools.get(tool)
+        if rule is not None and rule.target == "app":  # se ejecutó por orden del usuario: de eso se habla ahora
+            app_id = str(args.get("id", ""))
+            name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)
+            if name:
+                self._referent = ("app", name)
         if tool in self._config.free_in_web:
             self._web_ok = True
         elif rule is not None and rule.target in ("url", "sitio"):
@@ -213,4 +270,5 @@ class IntentGate:
             for url in urls:
                 if host := host_of(str(url)):
                     self._web_hosts.add(registrable(host))
+                    self._referent = ("web", registrable(host))
             self._web_ok = True
