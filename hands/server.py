@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from hands.actionlog import ActionLog
-from hands.apps import discovery, launcher
+from hands.apps import desktop, discovery, launcher
 from hands.apps.cache import DEFAULT_PATH, DEFAULT_TTL_SECONDS, IndexCache
 from hands.apps.index import AppIndex, hay_ganador_claro
 from hands.apps.models import AppEntry
@@ -45,6 +45,7 @@ HOST = "127.0.0.1"
 REFRESH_SECONDS = 15 * 60
 READY_TIMEOUT_SECONDS = 30.0  # lo que espera una herramienta de apps a que termine la primera carga del índice
 MAX_OPCIONES = 3  # si hay que preguntar, nunca más de tres opciones
+DESKTOP_REFRESH_SECONDS = 1.0  # el escritorio se vuelve a leer al buscar, como mucho una vez por segundo
 PANIC_TOOL = "system.panic"
 
 
@@ -82,6 +83,7 @@ def build_server(
     closer: AppCloser | None = None,
     media: Media | None = None,
     sessions: Sessions | None = None,
+    desktop_scan: Callable[[], list[AppEntry]] | None = None,
     launch_policy: LaunchPolicy | None = None,
     ready_timeout: float = READY_TIMEOUT_SECONDS,
 ) -> MCPServer:
@@ -95,6 +97,21 @@ def build_server(
             "ok": False,
             "mensaje": "Aún estoy indexando las aplicaciones del equipo; prueba de nuevo en unos segundos.",
         }
+
+    last_desktop_scan = [float("-inf")]
+
+    async def refresh_desktop(force: bool = False) -> bool:
+        """Un archivo recién creado en el escritorio sale sin esperar al refresco del índice (cada 15 min): el escritorio
+        es barato de leer, así que se relee al buscar (limitado en frecuencia; sin límite si la búsqueda no halló nada)."""
+        if desktop_scan is None or (not force and time.monotonic() - last_desktop_scan[0] < DESKTOP_REFRESH_SECONDS):
+            return False
+        last_desktop_scan[0] = time.monotonic()
+        try:
+            entries = await asyncio.to_thread(desktop_scan)
+        except Exception:
+            log.warning("no se pudo releer el escritorio", exc_info=True)
+            return False
+        return index.refresh_source(desktop.SOURCE, entries)
 
     # Cada herramienta corre en su propia tarea para que el botón del pánico la cancele sin tocar las del servidor MCP.
     running: set[asyncio.Future[dict[str, Any]]] = set()
@@ -150,7 +167,10 @@ def build_server(
         async def run() -> dict[str, Any]:
             if (waiting := await not_ready()) is not None:
                 return waiting
+            await refresh_desktop()
             found = index.search(nombre, limit=max(1, min(limite, 10)))
+            if not found and await refresh_desktop(force=True):  # recién creado y la lectura limitada no lo vio
+                found = index.search(nombre, limit=max(1, min(limite, 10)))
             items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
             if not found:
                 return {"ok": True, "mensaje": "0 resultados", "ganador_claro": False, "resultados": []}
@@ -463,7 +483,14 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
     media = Media(WinKeySender()) if sys.platform == "win32" else None
     sessions = Sessions(WinrtBackend(), press_key=media.key) if media is not None else None
     server = build_server(
-        index, actions=actions, web=web, browser=browser, closer=closer, media=media, sessions=sessions
+        index,
+        actions=actions,
+        web=web,
+        browser=browser,
+        closer=closer,
+        media=media,
+        sessions=sessions,
+        desktop_scan=lambda: desktop.scan(desktop.roots()),
     )
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index, cache))

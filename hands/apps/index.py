@@ -121,6 +121,16 @@ class AppIndex:
             self._entries, self._names = by_id, names
         self._ready.set()
 
+    def refresh_source(self, source: str, entries: Iterable[AppEntry]) -> bool:
+        """Cambia solo las entradas de una fuente (p. ej. el escritorio) sin rehacer todo el descubrimiento.
+        Devuelve True si cambió algo."""
+        fresh = list(entries)
+        current = [e for e in self._entries.values() if e.source == source]
+        if {(e.id, e.name) for e in current} == {(e.id, e.name) for e in fresh}:
+            return False
+        self.replace([*(e for e in self._entries.values() if e.source != source), *fresh])
+        return True
+
     def get(self, app_id: str) -> AppEntry | None:
         return self._entries.get(app_id)
 

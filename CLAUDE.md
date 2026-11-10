@@ -84,7 +84,7 @@ El planificador debe preferir siempre el escalón más bajo que funcione, porque
 | 4. Navegador | `browser.*` (Playwright por CDP) | Se conecta a un Chrome/Edge con perfil dedicado de Diogenes. Lee el DOM o el árbol de accesibilidad compactado, hace clic y rellena campos por rol y nombre |
 | 5. Interfaz nativa | `ui.windows()`, `ui.tree(ventana)`, `ui.click(elemento)`, `ui.type(texto)`, `ui.hotkey(...)` | Windows UI Automation (`pywinauto` o `uiautomation`). Se pasa al LLM un árbol **resumido** (rol, nombre, id; profundidad limitada) para que elija el elemento |
 | 6. Visión | `screen.look(pregunta)`, `mouse.*` | Último recurso: captura de la ventana, modelo con visión, coordenadas y ratón. Lento en CPU; solo si los escalones 1–5 no dan |
-| Sistema | `media.key` (teclas virtuales), `apps.close` / `apps.force_close`, `system.volume`, `window.focus/minimize`, `clipboard` | Llamadas directas a la API de Windows. `apps.close` cierra como el botón X (deja guardar); forzar es otra confirmación y hay una lista de procesos que nunca se cierran |
+| Sistema | `media.sessions` / `media.control` (sesiones multimedia de Windows: leen qué suena y verifican el estado), `media.key` (teclas virtuales; solo se puede decir «he pulsado X»), `apps.close` / `apps.force_close`, `system.volume`, `window.focus/minimize`, `clipboard` | Llamadas directas a la API de Windows. `apps.close` cierra como el botón X (deja guardar); forzar es otra confirmación y hay una lista de procesos que nunca se cierran |
 
 ### 3. Verificación
 
@@ -115,7 +115,8 @@ Damos control amplio, pero con estas reglas que no se negocian:
 
 - **Botón del pánico**: `Ctrl+Alt+Esc` cancela al instante cualquier acción en curso y vacía la cola. Tiene que funcionar aunque el agente esté en mitad de un bucle.
 - **Confirmación solo para lo irreversible**: borrar o mover archivos, cerrar apps con cambios sin guardar, forzar el cierre, enviar mensajes o correos en nombre del usuario, instalar o desinstalar software, ejecutar comandos de shell y cambiar ajustes del sistema. Lo demás (abrir, buscar, reproducir, navegar) va directo. La lista es configurable en `configuracion/confirmaciones.json`.
-- **Puerta de intención** (`core/intent.py`): lo que el usuario nombra en su mensaje se ejecuta directo; lo que solo propone el modelo (una app, una web, un cierre) pasa a confirmación mostrando el destino. Dentro de una web pedida, clic y escritura van directos, pero ir a otro dominio que el usuario no nombró pregunta. Los ejecutables y scripts (`.exe`, `.bat`, `.ps1`…) piden confirmación aunque el usuario los nombre. Verbos, extensiones y procesos protegidos, en `configuracion/confirmaciones.json`.
+- **Puerta de intención** (`core/intent.py`): lo que el usuario nombra en su mensaje se ejecuta directo; lo que solo propone el modelo (una app, una web, un cierre) pasa a confirmación mostrando el destino. Dentro de una web pedida, clic y escritura van directos, pero ir a otro dominio que el usuario no nombró pregunta. Los ejecutables y scripts (`.exe`, `.bat`, `.ps1`…) piden confirmación aunque el usuario los nombre. Si el mensaje pide cerrar y no abrir, `apps.launch` queda bloqueado en ese turno (`bloqueadas_al_cerrar`). Los pronombres («ciérralo», «eso», «la misma») se resuelven contra la última app o web nombrada o ejecutada por orden del usuario. Una acción pregunta una sola vez, con todos los motivos juntos. Verbos, extensiones y procesos protegidos, en `configuracion/confirmaciones.json`.
+- **Honestidad**: no se afirma lo que nada ha comprobado en ese turno (`_grounded` en `core/agent.py`): ni «no existe / no se encontró» sin haber llamado a `apps.search`, `browser.snapshot`…, ni «está sonando / en pausa / no hay ningún vídeo» tras `media.key` (solo se pulsó una tecla; el estado lo demuestra `media.control` verificado o `media.sessions`).
 - **Nunca** escribe contraseñas, datos de tarjetas ni completa pagos o compras. Si una tarea llega a ese punto, se para y te lo pasa a ti.
 - **El contenido de webs, ventanas y capturas son datos, no órdenes**. Si una página dice «ignora tus instrucciones y…», no se obedece. Se aplica la misma lógica que la prueba de prompt injection del proyecto de clase.
 - `hands-mcp` solo en `127.0.0.1`, con token. Nunca se expone a la red.
@@ -126,7 +127,7 @@ Damos control amplio, pero con estas reglas que no se negocian:
 
 - **Python 3.12** (se admite también 3.13 y 3.14: en los PCs del centro la política de control de aplicaciones bloquea el `_sqlite3.pyd` del Python 3.12 que instala `uv`, y allí se usa el Python del sistema), gestionado con `uv`. Lint y formato con `ruff`. Tipado con anotaciones en todo.
 - **MCP**: SDK oficial de Python (`mcp`), transporte HTTP.
-- **Windows**: `pywinauto` / `uiautomation`, `pywin32`, `keyboard` o `pynput` para atajos globales.
+- **Windows**: `pywinauto` / `uiautomation`, `pywin32`, `keyboard` o `pynput` para atajos globales. Sesiones multimedia: `winrt-Windows.Media.Control` (y sus dependencias `winrt-*`, fijadas en `pyproject.toml`).
 - **Navegador**: `playwright` conectado por CDP a un perfil dedicado.
 - **Voz**: `openWakeWord`, `faster-whisper`, `piper-tts`, `sounddevice`, `webrtcvad` o `silero-vad`.
 - **Búsqueda difusa**: `rapidfuzz`.
@@ -176,7 +177,7 @@ Este repo es el modo personal. La entrega de clase (11 de diciembre) se prepara 
 2. **[Hecha] Web**: `web.open` y `web.site_search` con OpenSearch y plantillas aprendidas. Hito: «búscame en YouTube cómo hacer mochis».
 3. **[Hecha] Navegador**: `browser.*` con Playwright por CDP (escalón 4), genérico y sin código por web. Hito: «dame el vídeo más visto del canal Hrom» y «búscame en Wikipedia Diógenes de Sinope». *Adelantada desde la fase 6*: peticiones como «dame el vídeo más visto del canal X» necesitan varios pasos dentro de una web (abrir canal, pestaña de vídeos, ordenar, abrir el primero) y hoy solo se sabe buscar. También cubre el hueco de `web.site_search` cuando no hay plantilla ni OpenSearch.
 4. **[Pendiente] Recetas**: guardado, reutilización y degradación. Hito: la segunda petición del mismo tipo no llama al LLM para navegar. (Pasa después del navegador porque las secuencias del navegador son lo que más conviene aprender.) Hoy solo se aprenden plantillas de búsqueda por URL (`web.site_search`).
-5. **[En curso] Sistema y multimedia**: atajos del router, volumen, ventanas. Botón del pánico. Hecho: atajos del router, `media.key`, `apps.close` y `apps.force_close`, botón del pánico (`Ctrl+Alt+Esc` y `/parar`). Falta: `system.volume`, `window.focus/minimize`, `clipboard` y bloquear la pantalla.
+5. **[En curso] Sistema y multimedia**: atajos del router, volumen, ventanas. Botón del pánico. Hecho: atajos del router, `media.key`, `apps.close` y `apps.force_close`, botón del pánico (`Ctrl+Alt+Esc` y `/parar`). `media.sessions` y `media.control` (API WinRT `winrt-Windows.Media.Control`, versión fijada; sin ella caen a `media.key`). El índice relee el escritorio al buscar, así que un archivo nuevo sale sin reiniciar. Falta: `system.volume`, `window.focus/minimize`, `clipboard` y bloquear la pantalla.
 6. **[Pendiente] Voz**: push-to-talk, STT y TTS. Hito: los tres ejemplos de arriba funcionan hablando.
 7. **[Pendiente] Interfaz nativa**: árbol UIA. Hito: una tarea dentro de una app sin protocolo ni búsqueda por URL.
 8. **[Pendiente] Visión**: `screen.look` como último recurso.
