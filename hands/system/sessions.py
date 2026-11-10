@@ -188,7 +188,13 @@ class Sessions:
         mensaje = (
             f"{len(items)} sesiones multimedia" if items else "Windows no ve ninguna sesión multimedia ahora mismo"
         )
-        return {"ok": True, "disponible": True, "mensaje": mensaje, "sesiones": items}
+        siguiente = (
+            "Para actuar sobre una: media_control con su id en sesion y la acción; devuelve el estado comprobado."
+            if items
+            else "Si el usuario pidió pausar, reanudar o cambiar de pista, prueba media_key: solo pulsa la tecla y "
+            "solo podrás decir que la has pulsado."
+        )
+        return {"ok": True, "disponible": True, "mensaje": mensaje, "sesiones": items, "siguiente": siguiente}
 
     @staticmethod
     def _pick(found: list[MediaSession], wanted: str) -> tuple[MediaSession | None, list[MediaSession]]:
