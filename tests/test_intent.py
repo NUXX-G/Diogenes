@@ -329,3 +329,43 @@ def test_la_config_sin_seccion_en_ningun_fichero_falla(tmp_path: Path) -> None:
     (tmp_path / "confirmaciones.json").write_text('{"herramientas": []}', encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         IntentConfig.load(tmp_path)
+
+
+# --- pedir cerrar bloquea apps.launch (no solo confirma) ---------------------------------------------------------
+
+
+async def test_si_pides_cerrar_apps_launch_queda_bloqueado_aunque_el_usuario_diga_que_si() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_BLOC}, names=TOOLS)
+    preguntas = Preguntas(respuesta=True)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="bloc de notas"),
+        llamar("apps_launch", id="startapps:bloc"),
+        decir("No lo he abierto."),
+    )
+    resultado = await agente(llm, backend, preguntas).run("cierra el bloc de notas")
+    assert "apps.launch" not in llamadas(backend) and preguntas.vistas == []
+    assert resultado.steps[-1].ok is False and "BLOQUEADO" in resultado.steps[-1].result
+    assert "no abras nada" in llm.seen[-1][-1].content.lower()
+
+
+async def test_cierra_y_abre_en_el_mismo_mensaje_no_bloquea_abrir() -> None:
+    backend = FakeBackend({"apps.search": BUSQUEDA_CALC}, names=TOOLS)
+    llm = FakeLLM(llamar("apps_search", nombre="calculadora"), llamar("apps_launch", id="startapps:calc"), decir("ok"))
+    await agente(llm, backend).run("cierra el bloc de notas y abre la calculadora")
+    assert "apps.launch" in llamadas(backend)
+
+
+async def test_un_nombre_en_lugar_del_id_en_apps_close_cuenta_como_pedido_si_lo_nombraste() -> None:
+    backend = FakeBackend(names=TOOLS)
+    preguntas = Preguntas()
+    llm = FakeLLM(llamar("apps_close", id="notepad"), decir("hecho"))
+    await agente(llm, backend, preguntas).run("cierra el notepad")
+    sent = next(a for n, a in backend.calls if n == "apps.close")
+    assert sent["nombrado"] is True and preguntas.vistas == []
+
+
+async def test_un_nombre_en_apps_close_que_no_dijiste_no_cuenta_como_pedido() -> None:
+    backend = FakeBackend(names=TOOLS)
+    llm = FakeLLM(llamar("apps_close", id="calculadora"), decir("hecho"))
+    await agente(llm, backend).run("cierra el notepad")
+    assert next(a for n, a in backend.calls if n == "apps.close")["nombrado"] is False

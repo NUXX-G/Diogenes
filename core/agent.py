@@ -603,6 +603,16 @@ class Agent:
         if name is None:
             return Step(call.name, call.arguments, f"ERROR: la herramienta '{call.name}' no existe", False)
         verdict = self._intent.check(name, call.arguments)
+        if verdict.blocked:
+            blocked = {
+                "ok": False,
+                "bloqueado": True,
+                "mensaje": (
+                    f"BLOQUEADO: el usuario ha pedido cerrar, no abrir ({verdict.target}). No abras nada. Para cerrar usa "
+                    "apps_close con el nombre de la app; si no está abierta, dilo."
+                ),
+            }
+            return Step(name, call.arguments, json.dumps(blocked, ensure_ascii=False), False)
         decided_by_tool = name in TOOL_DECIDES_CONFIRMATION
         if not verdict.allowed and not decided_by_tool:
             # lo propone el modelo sin que el mensaje lo pidiera: se enseña el destino y se pregunta

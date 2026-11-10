@@ -17,6 +17,7 @@ Los verbos, las herramientas de acción y las palabras genéricas viven en `conf
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -27,6 +28,7 @@ from hands.web.domains import host_of, registrable
 
 CONFIG_DIR = Path("configuracion")
 MAX_KNOWN_APPS = 500
+ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class IntentConfig:
     tools: dict[str, Rule]
     free_in_web: frozenset[str]
     generic_words: frozenset[str]
+    blocked_when_closing: frozenset[str] = frozenset({"apps.launch"})
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> IntentConfig:
@@ -52,6 +55,7 @@ class IntentConfig:
             tools=tools,
             free_in_web=frozenset(data.get("libres_en_web", [])),
             generic_words=frozenset(normalize(w) for w in data.get("palabras_genericas", [])),
+            blocked_when_closing=frozenset(data.get("bloqueadas_al_cerrar", ["apps.launch"])),
         )
 
     @classmethod
@@ -74,6 +78,7 @@ class Verdict:
     allowed: bool
     target: str = ""  # a dónde va, para mostrárselo al usuario
     reason: str = ""
+    blocked: bool = False  # no se ejecuta ni preguntando: el mensaje pide lo contrario
 
 
 def _similar(a: str, b: str) -> bool:
@@ -149,7 +154,13 @@ class IntentGate:
         tokens = normalize(site).split()
         return bool(tokens) and all(_mentions(t, self._mandate) for t in tokens)
 
+    def _only_closing(self) -> bool:
+        """El mensaje pide cerrar y no pide abrir nada: abrir sería lo contrario de lo pedido."""
+        return self._has_verb(("cerrar",)) and not self._has_verb(("abrir",))
+
     def check(self, tool: str, args: dict[str, Any]) -> Verdict:
+        if tool in self._config.blocked_when_closing and self._only_closing():
+            return Verdict(False, str(args.get("id", "")), "has pedido cerrar, no abrir", blocked=True)
         rule = self._config.tools.get(tool)
         if rule is None:
             if tool in self._config.free_in_web and not self._web_ok:
@@ -158,7 +169,7 @@ class IntentGate:
         verbs_ok = self._has_verb(rule.verbs)
         if rule.target == "app":
             app_id = str(args.get("id", ""))
-            name = self._known_apps.get(app_id)
+            name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)  # nombre en vez de id
             ok = verbs_ok and name is not None and self._names_app(name)
             return Verdict(ok, name or app_id, "" if ok else "no lo has pedido en tu mensaje")
         if rule.target == "url":

@@ -218,19 +218,47 @@ def build_server(
 
     if closer is not None:
 
+        async def open_target(ident: str) -> tuple[AppEntry | None, dict[str, Any] | None]:
+            """La app a cerrar: la del id si existe; si el modelo se inventó el id (o puso un nombre), se busca por nombre
+            entre las apps abiertas. Sin ganador, un motivo claro (no está abierta / cuál de varias); nunca se abre nada."""
+            if (waiting := await not_ready()) is not None:
+                return None, waiting
+            entry = index.get(ident)
+            if entry is not None:
+                return entry, None
+            candidates = [r.entry for r in index.search(ident, limit=5)]
+            is_open = await asyncio.gather(*(asyncio.to_thread(closer.is_open, e) for e in candidates))
+            running = [e for e, opened in zip(candidates, is_open, strict=True) if opened]
+            if len(running) == 1:
+                return running[0], None
+            if not running:
+                return None, {
+                    "ok": False,
+                    "mensaje": f"«{ident}» no está abierta: no veo ninguna ventana suya. No hay nada que cerrar y no la abro.",
+                }
+            options = [{"n": n, "id": e.id, "nombre": e.name} for n, e in enumerate(running[:MAX_OPCIONES], start=1)]
+            return None, {
+                "ok": True,
+                "mensaje": f"«{ident}» coincide con {len(options)} apps abiertas",
+                "ganador_claro": False,
+                "instruccion": "Pregunta al usuario cuál de las opciones numeradas quiere cerrar.",
+                "opciones": options,
+            }
+
         @server.tool(
             name="apps.close",
             description=(
                 "Cierra una aplicación abierta (id de apps.search) como con el botón X: si tiene cambios sin guardar, "
-                "la propia app pregunta. Si devuelve requiere_confirmacion, el usuario decide. Si la app sigue abierta "
-                "después, díselo al usuario; no la fuerces por tu cuenta."
+                "la propia app pregunta. Si devuelve requiere_confirmacion, el usuario decide. Acepta el id de apps.search "
+                "o el nombre de la app; solo cierra apps abiertas y nunca abre ninguna. Si la app sigue abierta después "
+                "(sigue_abierta=true) y el usuario quiere cerrarla, llama a apps.force_close (pide su propia confirmación)."
             ),
         )
         async def apps_close(id: str, confirmado: bool = False, nombrado: bool = False) -> dict[str, Any]:
             async def run() -> dict[str, Any]:
-                entry = index.get(id)
+                entry, problem = await open_target(id)
                 if entry is None:
-                    return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
+                    return problem or {"ok": False, "mensaje": f"No encuentro «{id}»."}
                 return await asyncio.to_thread(closer.close, entry, confirmado, nombrado)
 
             return await audited("apps.close", {"id": id, "confirmado": confirmado, "nombrado": nombrado}, run)
@@ -244,9 +272,9 @@ def build_server(
         )
         async def apps_force_close(id: str) -> dict[str, Any]:
             async def run() -> dict[str, Any]:
-                entry = index.get(id)
+                entry, problem = await open_target(id)
                 if entry is None:
-                    return {"ok": False, "mensaje": f"id desconocido: {id}. Usa apps.search primero."}
+                    return problem or {"ok": False, "mensaje": f"No encuentro «{id}»."}
                 return await asyncio.to_thread(closer.force_close, entry)
 
             return await audited("apps.force_close", {"id": id}, run)

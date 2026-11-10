@@ -135,6 +135,10 @@ class AppCloser:
             return folder_windows(entry, windows)
         return [w for w in windows if matches(entry, w)]
 
+    def is_open(self, entry: AppEntry) -> bool:
+        """¿Tiene alguna ventana abierta ahora mismo?"""
+        return bool(self._windows_of(entry))
+
     def _description(self, wins: list[Win]) -> str:
         exes = sorted({w.exe_name or f"pid {w.pid}" for w in wins})
         titles = "; ".join(w.title[:60] for w in wins[:3])
@@ -142,7 +146,10 @@ class AppCloser:
 
     def _refusal(self, entry: AppEntry, wins: list[Win]) -> dict[str, Any] | None:
         if not wins:
-            return {"ok": False, "mensaje": f"{entry.name} no está abierta (no veo ninguna ventana suya)."}
+            return {
+                "ok": False,
+                "mensaje": f"{entry.name} no está abierta (no veo ninguna ventana suya): no hay nada que cerrar.",
+            }
         if any(self._protected(w) for w in wins):
             return {
                 "ok": False,

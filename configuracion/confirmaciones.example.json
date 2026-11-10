@@ -47,6 +47,7 @@
       "browser.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "web.site_search": {"verbos": ["buscar", "abrir", "navegar"], "objetivo": "sitio"}
     },
+    "bloqueadas_al_cerrar": ["apps.launch"],
     "libres_en_web": ["browser.click", "browser.type"],
     "palabras_genericas": ["de", "del", "la", "el", "los", "las", "app", "apps", "application", "aplicacion", "microsoft", "windows", "google", "the", "for", "desktop", "classic", "new", "version", "launcher"]
   },

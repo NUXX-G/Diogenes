@@ -405,3 +405,71 @@ def test_una_carpeta_con_guion_en_el_nombre_se_reconoce() -> None:
     backend = FakeWindows(carpeta(30, "Mis - Cosas"))
     result = AppCloser(backend, CONFIG, sleep=lambda _s: None, is_dir=lambda _p: True).close(mia, False, named=True)
     assert result["cerrada"] is True
+
+
+# --- ids inventados y cierre sin abrir nada ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def servidor_con_bloc() -> tuple[Any, FakeWindows]:
+    index = AppIndex()
+    index.replace(
+        [
+            NOTEPAD,
+            AppEntry("startapps:paint", "Paint", "startapps", "shell", "Microsoft.Paint_8wekyb3d8bbwe!App"),
+            AppEntry("startapps:calc", "Calculadora", "startapps", "shell", "Microsoft.WindowsCalculator!App"),
+        ]
+    )
+    windows = FakeWindows(bloc())
+    return hands_server.build_server(index, closer=closer(windows), launch=lambda _e: None), windows
+
+
+async def test_un_id_inventado_se_resuelve_por_nombre_entre_las_apps_abiertas(servidor_con_bloc: Any) -> None:
+    server, windows = servidor_con_bloc
+    async with Client(server) as client:
+        res = json.loads(
+            (await client.call_tool("apps.close", {"id": "bloc de notas", "nombrado": True})).content[0].text
+        )
+    assert res["cerrada"] is True and windows.cerradas == [100]
+
+
+async def test_cerrar_una_app_que_no_esta_abierta_lo_dice_y_no_propone_abrirla(servidor_con_bloc: Any) -> None:
+    server, windows = servidor_con_bloc
+    async with Client(server) as client:
+        res = json.loads(
+            (await client.call_tool("apps.close", {"id": "calculadora", "nombrado": True})).content[0].text
+        )
+    assert res["ok"] is False and "no está abierta" in res["mensaje"] and "no la abro" in res["mensaje"]
+    assert windows.cerradas == []
+
+
+async def test_un_id_con_forma_de_id_pero_inexistente_tampoco_cierra_nada(servidor_con_bloc: Any) -> None:
+    server, windows = servidor_con_bloc
+    async with Client(server) as client:
+        res = json.loads((await client.call_tool("apps.close", {"id": "startapps:inventado"})).content[0].text)
+    assert res["ok"] is False and windows.cerradas == []
+
+
+async def test_varias_abiertas_que_encajan_devuelve_la_lista_de_candidatas() -> None:
+    index = AppIndex()
+    index.replace(
+        [
+            AppEntry("startapps:a", "Bloc de notas", "startapps", "shell", "A!App"),
+            AppEntry("startapps:b", "Bloc de dibujo", "startapps", "shell", "B!App"),
+        ]
+    )
+    windows = FakeWindows(
+        Win(1, 10, "Sin título - Bloc de notas", r"C:\x\a.exe"), Win(2, 11, "Lienzo - Bloc de dibujo", r"C:\x\b.exe")
+    )
+    server = hands_server.build_server(index, closer=closer(windows), launch=lambda _e: None)
+    async with Client(server) as client:
+        res = json.loads((await client.call_tool("apps.close", {"id": "bloc"})).content[0].text)
+    assert res["ganador_claro"] is False and {o["id"] for o in res["opciones"]} == {"startapps:a", "startapps:b"}
+    assert windows.cerradas == []
+
+
+async def test_force_close_tambien_resuelve_por_nombre(servidor_con_bloc: Any) -> None:
+    server, windows = servidor_con_bloc
+    async with Client(server) as client:
+        res = json.loads((await client.call_tool("apps.force_close", {"id": "calculadora"})).content[0].text)
+    assert res["ok"] is False and "no está abierta" in res["mensaje"] and windows.terminados == []
