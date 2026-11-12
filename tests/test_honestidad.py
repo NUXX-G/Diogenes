@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from core.agent import SYSTEM_PROMPT, Step, _grounded
+from core.agent import SYSTEM_PROMPT, Agent, Step, _grounded
 from hands.browser.rules import BrowserRules
-from tests.test_agent import FakeLLM, decir, llamar
+from tests.test_agent import POLICY, FakeBackend, FakeLLM, decir, llamar
 from tests.test_browser import FakePage
 from tests.test_browser_safety import aprobar, ejecutar_con
 
@@ -362,3 +362,25 @@ def test_frases_normales_con_no_hay_no_se_tocan(respuesta: str) -> None:
     from core.agent import _grounded
 
     assert _grounded(respuesta, []) == respuesta
+
+
+# --- cierres que no ocurrieron ------------------------------------------------------------------------------------
+
+
+async def test_no_puede_decir_que_ha_cerrado_algo_sin_haberlo_cerrado() -> None:
+    """Caso real (banco, 2026-11-12): buscó la calculadora en vez de cerrarla y contestó «He cerrado la calculadora»."""
+
+    backend = FakeBackend({"apps.search": '{"ok": true, "resultados": []}'})
+    llm = FakeLLM(llamar("apps_search", nombre="calculadora"), decir("No está abierta. He cerrado la calculadora."))
+    resultado = await Agent(llm, backend, policy=POLICY).run("cierra la calculadora")
+    assert resultado.answer.startswith("No he cerrado nada")
+
+
+async def test_si_el_cierre_se_comprobo_puede_decirlo() -> None:
+
+    backend = FakeBackend(
+        {"apps.close": '{"ok": true, "cerrada": true, "mensaje": "He cerrado Paint."}'}, ("apps.close",)
+    )
+    llm = FakeLLM(llamar("apps_close", id="paint"), decir("He cerrado Paint y algo más."))
+    resultado = await Agent(llm, backend, policy=POLICY).run("cierra paint y dime la hora")
+    assert resultado.answer == "He cerrado Paint y algo más."

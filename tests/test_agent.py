@@ -65,11 +65,10 @@ async def test_flujo_buscar_y_lanzar_con_hands_real_en_proceso() -> None:
     llm = FakeLLM(
         llamar("apps_search", nombre="brawlhalla"),
         llamar("apps_launch", id="steam:291550"),
-        decir("Brawlhalla abierto."),
     )
     async with Client(build_server(index, launch=lanzadas.append)) as client:
         resultado = await Agent(llm, McpTools(client), policy=POLICY).run("abre Brawlhalla")
-    assert resultado.answer == "Brawlhalla abierto."
+    assert resultado.answer == "He abierto Brawlhalla."  # lanzada y verificada: sin modelo
     assert [s.tool for s in resultado.steps] == ["apps.search", "apps.launch"]
     assert all(s.ok for s in resultado.steps)
     assert [e.id for e in lanzadas] == ["steam:291550"]
@@ -206,7 +205,6 @@ async def test_secuencia_del_fallo_original_con_empate_y_eleccion_posterior() ->
         decir("¿Cuál? 1. Discord Canary 2. Discord PTB 3. Discord Dev"),
         # turno 2: "el segundo" → se resuelve en código, el modelo solo lanza
         llamar("apps_launch", id=segunda_opcion.id),
-        decir("Abierto."),
     )
     async with Client(build_server(indice_discord(), launch=lanzadas.append)) as client:
         agente = Agent(llm, McpTools(client), policy=POLICY)
@@ -214,7 +212,7 @@ async def test_secuencia_del_fallo_original_con_empate_y_eleccion_posterior() ->
         segunda = await agente.run("el segundo")
 
     assert primera.answer.startswith("¿Cuál?")
-    assert segunda.answer == "Abierto."
+    assert segunda.answer == f"He abierto {segunda_opcion.name}."
     assert [e.id for e in lanzadas] == [segunda_opcion.id]
     # al modelo le llega la petición original + la opción ya resuelta, no un "el segundo" huérfano
     turno2 = llm.seen[2]
@@ -341,11 +339,11 @@ async def test_llamadas_identicas_en_una_respuesta_se_ejecutan_una_vez() -> None
     bucle = LLMResponse("", tuple(ToolCall("apps_launch", {"id": "startapps:967ad27c"}) for _ in range(9)))
     backend = FakeBackend()
     llm = FakeLLM(bucle, decir("abierto"))
-    gate = IntentGate.load()
+    gate = IntentGate.load()  # "abre el editor y dime qué es": pide algo más, así que el modelo vuelve a hablar
     gate.observe(
         "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:967ad27c", "nombre": "Editor"}]})
     )
-    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor")
+    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor y dime qué es")
     assert backend.calls == [("apps.launch", {"id": "startapps:967ad27c"})]
     assert len(resultado.steps) == 1
     # el historial refleja lo que realmente se ejecutó, no las nueve copias

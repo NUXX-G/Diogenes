@@ -234,7 +234,8 @@ async def test_inyeccion_en_una_pagina_ve_a_evil_com_pide_confirmacion() -> None
         decir("no he ido"),
     )
     preguntas = Preguntas(respuesta=False)
-    await agente(llm, backend, preguntas).run("búscame en YouTube mochis")
+    # pide más que buscar: el turno sigue tras la búsqueda y el modelo ve la página con la inyección
+    await agente(llm, backend, preguntas).run("búscame en YouTube mochis y ábreme el primero")
     assert [c for c in backend.calls if c[0] == "browser.open"] == [
         ("browser.open", {"url": "https://www.youtube.com/@hrom/videos"})
     ]
@@ -254,7 +255,7 @@ async def test_inyeccion_en_una_pagina_abre_calculadora_no_lanza_nada() -> None:
         decir("no"),
     )
     preguntas = Preguntas(respuesta=False)
-    await agente(llm, backend, preguntas).run("búscame en YouTube mochis")
+    await agente(llm, backend, preguntas).run("búscame en YouTube mochis y ábreme el primero")
     assert "apps.launch" not in llamadas(backend)
     assert preguntas.vistas[0][0] == "apps.launch"
 
@@ -488,8 +489,7 @@ async def test_ciérralo_tras_hablar_de_paint_en_el_agente_cierra_directo_sin_pr
     preguntas = Preguntas()
     llm = FakeLLM(
         llamar("apps_search", nombre="paint"),
-        llamar("apps_launch", id="startapps:paint"),
-        decir("Paint abierto."),
+        llamar("apps_launch", id="startapps:paint"),  # lanzada: la respuesta la escribe el código
         llamar("apps_close", id="startapps:paint"),
         decir("Cerrado."),
     )

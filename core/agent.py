@@ -22,13 +22,17 @@ from core.mcp_client import ToolBackend
 from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
 from core.router import Router
 from core.safety import Confirm, ConfirmationPolicy
+from core.toolsets import ToolSelector
+from hands.apps.index import CONECTORES, palabra_encaja
+from hands.apps.models import normalize
 
 SYSTEM_PROMPT = """Eres Diogenes, un asistente que controla este ordenador Windows. Responde en español, breve y seco.
 
 Cómo trabajar:
-- Para abrir una aplicación o juego: llama a apps_search con el nombre y después a apps_launch con el id EXACTO \
-devuelto. Nunca inventes ids.
-- Mira el campo ganador_claro del resultado de apps_search:
+- Para abrir una aplicación, juego, carpeta o archivo: llama a apps_open con el nombre; busca y abre en un solo paso \
+(lanzada=true: ya está abierta, no llames a nada más). Si apps_open no existe: apps_search con el nombre y después \
+apps_launch con el id EXACTO devuelto. Nunca inventes ids.
+- Mira el campo ganador_claro del resultado de apps_search o apps_open:
   · ganador_claro=true: llama a apps_launch con id=id_ganador AHORA, sin preguntar. Buscar no abre nada.
   · ganador_claro=false: pregunta cuál quiere, mostrando solo las "opciones" numeradas (máximo 3), y espera su \
 respuesta. Si responde "el primero", "la segunda", un nombre o "sí", usa esa opción sin volver a buscar ni preguntar.
@@ -141,6 +145,7 @@ def _clip(text: str) -> str:
 TOOL_LABELS = {
     "apps.search": "la búsqueda de apps",
     "apps.launch": "abrir la app",
+    "apps.open": "abrir la app",
     "apps.close": "cerrar la app",
     "apps.force_close": "forzar el cierre",
     "media.key": "las teclas multimedia",
@@ -438,6 +443,7 @@ NOT_FOUND = re.compile(
 VERIFYING_TOOLS = frozenset(
     {
         "apps.search",
+        "apps.open",
         "apps.close",
         "apps.force_close",
         "media.sessions",
@@ -507,6 +513,20 @@ def _unverified_media_claim(answer: str, steps: list[Step]) -> str | None:
     return f"{done}; no puedo comprobar si ha cambiado lo que suena, así que no sé si está sonando o en pausa."
 
 
+CLOSED_CLAIM = re.compile(r"\b(?:he cerrado|cerr[eé]|se ha cerrado|ya est[aá] cerrad[oa])\b", re.IGNORECASE)
+
+
+def _unchecked_close(answer: str, steps: list[Step]) -> str | None:
+    """Dice que ha cerrado algo sin que ninguna herramienta de cierre lo haya conseguido en este turno."""
+    if not CLOSED_CLAIM.search(answer):
+        return None
+    closed = any(
+        s.tool in ("apps.close", "apps.force_close") and (_json_dict(s.result) or {}).get("cerrada") is True
+        for s in steps
+    )
+    return None if closed else "No he cerrado nada: en este turno ninguna app se ha llegado a cerrar."
+
+
 def _grounded(answer: str, steps: list[Step]) -> str:
     """El resumen final no puede afirmar lo que la última comprobación no confirma: ni un envío o "hecho", ni un
     superlativo ("el más barato") sin una ordenación de la web que lo garantice, ni que algo "no existe" sin haberlo
@@ -515,6 +535,8 @@ def _grounded(answer: str, steps: list[Step]) -> str:
         return media
     if (absence := _unchecked_absence(answer, steps)) is not None:
         return absence
+    if (close := _unchecked_close(answer, steps)) is not None:
+        return close
     actions = [s for s in steps if s.tool in ACTION_TOOLS]
     if actions and CLAIM.search(answer):
         failure = _honest_failure(actions[-1])
@@ -548,6 +570,23 @@ def _stop_message(output: str) -> str | None:
     return None
 
 
+# Palabras de una orden que no hace falta "cubrir" con lo que se hizo ("busca EN youtube", "dame el vídeo DEL canal").
+_NO_TARGET = CONECTORES | frozenset({"con", "para", "sobre", "por", "que", "y", "me", "lo", "le", "mis", "tu", "tus"})
+
+
+def covers(target: str | None, texts: list[str]) -> bool:
+    """¿Lo hecho cubre todo lo que nombra la orden? Cada palabra del objetivo tiene que estar en lo que se hizo."""
+    if target is None:
+        return True
+    done = [w for t in texts for w in normalize(t).split()]
+    return all(palabra_encaja(w, done) for w in normalize(target).split() if w not in _NO_TARGET)
+
+
+def _options_question(subject: str, options: list[dict[str, Any]]) -> str:
+    lines = "\n".join(f"{o.get('n', i)}. {o.get('nombre', '')}" for i, o in enumerate(options, start=1))
+    return f"Hay varias opciones para «{subject}»:\n{lines}\n¿Cuál quieres?"
+
+
 def _size(message: Message) -> int:
     return len(message.content) + sum(len(json.dumps(c.arguments)) + len(c.name) for c in message.tool_calls)
 
@@ -561,6 +600,7 @@ class Agent:
         policy: ConfirmationPolicy | None = None,
         intent: IntentGate | None = None,
         router: Router | None = None,
+        toolset: ToolSelector | None = None,
         confirm: Confirm | None = None,
         max_steps: int = 12,
         max_seconds: float = 180.0,
@@ -573,6 +613,7 @@ class Agent:
         self._policy = policy or ConfirmationPolicy.load()
         self._intent = intent or IntentGate.load()
         self._router = router or Router.load()
+        self._selector = toolset or ToolSelector.load()
         self._confirm = confirm
         self._max_steps = max_steps
         self._max_seconds = max_seconds
@@ -615,6 +656,8 @@ class Agent:
                 usage.output_tokens if usage else 0,
                 len(specs),
                 usage.load_seconds if usage else 0.0,
+                usage.prompt_seconds if usage else 0.0,
+                usage.output_seconds if usage else 0.0,
             )
         )
         return response
@@ -652,8 +695,9 @@ class Agent:
         self._history.append(Message("user", text))
         result = AgentResult("")
         target = self._intent.action_target(request) if text == request else None
+        shown = self._selector.select(specs, to_mcp, original, in_web=self._intent.in_web, everything=text != request)
         try:
-            await self._loop(specs, to_mcp, result, started, original, target)
+            await self._loop(shown, to_mcp, result, started, original, target)
         except asyncio.CancelledError:
             del self._history[turn_start:]
             self._pending = None  # tras el pánico, un "sí" o "el segundo" no puede reanudar lo cancelado
@@ -750,12 +794,52 @@ class Agent:
                     result.answer = stop
                     self._history.append(Message("assistant", stop))
                     return
+            if (template := self._template_answer(original, result.steps)) is not None:
+                # Acción simple y verificada: la frase final la escribe el código y se ahorra una llamada al modelo.
+                result.answer = _without_tool_names(_grounded(template, result.steps), tool_names)
+                self._turn.answer_by_template = True
+                self._history.append(Message("assistant", result.answer))
+                return
 
         result.finished = False
         result.answer = (
             f"No he podido terminar en el límite de pasos o de tiempo. Lo que intenté: {_resumen(result.steps)}."
         )
         self._history.append(Message("assistant", result.answer))
+
+    def _template_answer(self, request: str, steps: list[Step]) -> str | None:
+        """La respuesta final sin modelo cuando el turno fue UNA acción que el usuario pidió entera y que la herramienta
+        ha comprobado: "He abierto Spotify", "He cerrado Paint", "He buscado «mochis» en YouTube", lo que diga
+        media_control. Si la orden encadena otra cosa o pide algo que lo hecho no cubre, decide el modelo."""
+        if not steps or not steps[-1].ok or self._intent.is_compound(request):
+            return None
+        last = steps[-1]
+        data = _json_dict(last.result) or {}
+        target = self._intent.action_target(request)
+        args = {k: str(v) for k, v in last.arguments.items()}
+        if last.tool in ("apps.open", "apps.close") and data.get("ganador_claro") is False and data.get("opciones"):
+            return _options_question(args.get("nombre") or args.get("id", ""), list(data["opciones"]))
+        if last.tool == "apps.open" and data.get("lanzada") is True:
+            name = str(data.get("nombre", ""))
+            return f"He abierto {name}." if covers(target, [name]) else None
+        if last.tool == "apps.launch" and data.get("ok") is True:
+            name = self._intent.app_name(args.get("id", ""))
+            return f"He abierto {name}." if name and covers(target, [name]) else None
+        if last.tool in ("apps.close", "apps.force_close") and data.get("cerrada") is True:
+            message = str(data.get("mensaje", ""))
+            return message if covers(target, [message, args.get("id", "")]) else None
+        if last.tool == "web.site_search" and data.get("ok") is True:
+            site, query = args.get("sitio", ""), args.get("consulta", "")
+            if not covers(target, [site, query]):
+                return None
+            warning = f" Aviso: {data['aviso']}." if data.get("aviso") else ""
+            return f"He buscado «{query}» en {site}.{warning}"
+        if last.tool == "web.open" and data.get("ok") is True:
+            url = args.get("url", "")
+            return f"He abierto {url}." if covers(target, [url]) else None
+        if last.tool in ("media.control", "media.key") and data.get("ok") is True and data.get("mensaje"):
+            return str(data["mensaje"])
+        return None
 
     @staticmethod
     def _forced_search(target: str | None, to_mcp: dict[str, str], steps: list[Step]) -> ToolCall | None:
@@ -773,13 +857,20 @@ class Agent:
                 status = m.content.split(PAGE_MARKER, 1)[0].rstrip()
                 self._history[i] = Message("tool", f"{status}\n{SNAPSHOT_STUB}".strip(), tool_name=m.tool_name)
 
+    def _fits(self, turns: int, chars: int) -> bool:
+        starts = sum(1 for m in self._history if m.role == "user")
+        return starts <= turns and sum(_size(m) for m in self._history) <= chars
+
     def _trim(self) -> None:
-        """Antes de un turno nuevo, descarta turnos enteros (el más antiguo primero) hasta que quepa en los topes."""
-        while self._history:
+        """Antes de un turno nuevo, si no cabe en los topes, descarta turnos enteros (el más antiguo primero) hasta la
+        MITAD de los topes. Cada recorte cambia el principio de la conversación y Ollama tiene que recalcularla entera
+        (su caché de prefijo solo sirve si el principio no cambia): mejor un recorte grande de vez en cuando que uno
+        pequeño en cada turno, que en la CPU del aula cuesta 30-60 s por turno."""
+        if self._fits(self._max_turns - 1, self._max_chars):
+            return
+        turns, chars = max(1, (self._max_turns - 1) // 2), self._max_chars // 2
+        while self._history and not self._fits(turns, chars):
             starts = [i for i, m in enumerate(self._history) if m.role == "user"]
-            cabe = len(starts) <= self._max_turns - 1 and sum(_size(m) for m in self._history) <= self._max_chars
-            if cabe:
-                return
             del self._history[: starts[1] if len(starts) > 1 else len(self._history)]
 
     async def _execute(self, call: ToolCall, to_mcp: dict[str, str]) -> Step:

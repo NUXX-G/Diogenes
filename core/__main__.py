@@ -19,6 +19,7 @@ from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL,
 from core.mcp_client import connect_hands
 from core.metrics import MetricsLog
 from core.session import Session
+from core.toolsets import ToolSelector
 
 
 def format_step(step: Step) -> str:
@@ -80,7 +81,13 @@ async def amain() -> int:
             metrics=MetricsLog(Path("logs")),
             show_metrics=os.environ.get("DIOGENES_TIEMPOS", "1") != "0",
         )
-        agent = Agent(llm, tools, confirm=session.confirm, on_step=lambda s: print(format_step(s)))
+        agent = Agent(
+            llm,
+            tools,
+            confirm=session.confirm,
+            on_step=lambda s: print(format_step(s)),
+            toolset=ToolSelector.load(os.environ.get("DIOGENES_HERRAMIENTAS", "todas")),
+        )
         loop = asyncio.get_running_loop()
         combo = load_combo()
         hotkey = HotkeyListener(combo, lambda: loop.call_soon_threadsafe(session.panic))
