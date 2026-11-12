@@ -25,9 +25,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from hands.actionlog import ActionLog
 from hands.apps import desktop, discovery, launcher
 from hands.apps.cache import DEFAULT_PATH, DEFAULT_TTL_SECONDS, IndexCache
-from hands.apps.index import AppIndex, cubre, hay_ganador_claro
+from hands.apps.index import AppIndex, cubre, ganador_por_uso, hay_ganador_claro, por_uso
 from hands.apps.models import AppEntry
 from hands.apps.policy import LaunchPolicy
+from hands.apps.usage import UsageReader
 from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.system.closer import AppCloser, CloseConfig
@@ -83,6 +84,7 @@ def build_server(
     closer: AppCloser | None = None,
     media: Media | None = None,
     sessions: Sessions | None = None,
+    usage: UsageReader | None = None,
     desktop_scan: Callable[[], list[AppEntry]] | None = None,
     launch_policy: LaunchPolicy | None = None,
     ready_timeout: float = READY_TIMEOUT_SECONDS,
@@ -171,10 +173,12 @@ def build_server(
             found = index.search(nombre, limit=max(1, min(limite, 10)))
             if not found and await refresh_desktop(force=True):  # recién creado y la lectura limitada no lo vio
                 found = index.search(nombre, limit=max(1, min(limite, 10)))
+            scores = usage.apps() if usage else {}
+            found = por_uso(found, scores)
             items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
             if not found:
                 return {"ok": True, "mensaje": "0 resultados", "ganador_claro": False, "resultados": []}
-            if hay_ganador_claro(found):
+            if hay_ganador_claro(found) or ganador_por_uso(found, scores):
                 return {
                     "ok": True,
                     "mensaje": f"{len(found)} resultados; ganador claro: {found[0].entry.name}",
@@ -242,6 +246,8 @@ def build_server(
             found = index.search(nombre, limit=5)
             if not found and await refresh_desktop(force=True):
                 found = index.search(nombre, limit=5)
+            scores = usage.apps() if usage else {}
+            found = por_uso(found, scores)
             if not found:
                 return {
                     "ok": True,
@@ -250,7 +256,7 @@ def build_server(
                     "resultados": [],
                 }
             winner = found[0].entry
-            if not (hay_ganador_claro(found) and cubre(nombre, winner)):
+            if not ((hay_ganador_claro(found) or ganador_por_uso(found, scores)) and cubre(nombre, winner)):
                 items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
                 opciones = [{"n": n, **item} for n, item in enumerate(items[:MAX_OPCIONES], start=1)]
                 return {
@@ -578,6 +584,7 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
         media=media,
         sessions=sessions,
         desktop_scan=lambda: desktop.scan(desktop.roots()),
+        usage=UsageReader(db_path, float(os.environ.get("DIOGENES_USO_VIDA_MEDIA_DIAS", "14"))),
     )
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index, cache))

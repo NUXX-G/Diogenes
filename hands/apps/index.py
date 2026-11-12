@@ -14,6 +14,7 @@ from difflib import SequenceMatcher
 from rapidfuzz import fuzz, process
 
 from hands.apps.models import AppEntry, normalize
+from hands.apps.usage import clear_by_use
 
 # Si dos fuentes dan la misma app, gana la primera: es la que Windows o el cliente de juegos usan de verdad.
 PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "carpetas", "desktop", "registry")
@@ -125,6 +126,29 @@ def cubre(query: str, entry: AppEntry) -> bool:
         return True
     nombres = [w for text in (entry.name, *entry.aliases) for w in normalize(text).split()]
     return all(palabra_encaja(p, nombres) for p in palabras)
+
+
+def por_uso(resultados: Sequence[Resultado], uso: dict[str, float]) -> list[Resultado]:
+    """Reordena por uso solo DENTRO de los grupos que el índice ya considera iguales (mismo tipo de coincidencia y de
+    fuente): una app muy usada no adelanta a una coincidencia exacta, pero desempata entre dos parecidas."""
+    if not uso:
+        return list(resultados)
+    puesto = {id(r): n for n, r in enumerate(resultados)}
+
+    def grupo(r: Resultado) -> tuple[int, bool, int]:
+        return (0 if r.tier <= PREFIJO else 1, not r.con_interfaz, r.tier)
+
+    return sorted(resultados, key=lambda r: (grupo(r), -uso.get(r.entry.id, 0.0), puesto[id(r)]))
+
+
+def ganador_por_uso(resultados: Sequence[Resultado], uso: dict[str, float]) -> bool:
+    """Sin ganador claro por nombre, ¿lo hay por uso? Las dos primeras del mismo grupo y la primera mucho más usada."""
+    if len(resultados) < 2:
+        return False
+    a, b = resultados[0], resultados[1]
+    if (a.tier, a.con_interfaz) != (b.tier, b.con_interfaz):
+        return False
+    return clear_by_use(a.entry.id, b.entry.id, uso)
 
 
 class AppIndex:
