@@ -83,7 +83,8 @@ el más visto".
 lo que encontraste difiere de lo que pidió el usuario (pidió "RTX 5060" y es una "Ti"), dilo. Cita solo precios y \
 cifras que veas en la página; nunca los estimes ni los redondees.
 - Para saber si algo está abierto o qué hay abierto («¿está abierto X?», «busca si hay un X abierto», «qué \
-tengo abierto»): apps_abiertas, con el nombre o sin él. Nunca apps_launch ni apps_open para comprobarlo.
+tengo abierto»): apps_abiertas, con el nombre o sin él. Nunca apps_launch ni apps_open para comprobarlo. Para \
+CERRAR no hace falta mirarlo antes: apps_close directamente.
 - Si el usuario pide cerrar (cierra, ciérralo, cerrar, quita, sal de), NUNCA llames a apps_launch, ni siquiera para \
 conseguir un id: usa apps_close directamente con el nombre que ha dicho.
 - Para cerrar una app: apps_close con su nombre o su id; solo cierra apps abiertas y nunca abre ninguna. Si el resultado dice sigue_abierta=true (la app preguntó por guardar o no se cerró) y el usuario quiere cerrarla, llama DIRECTAMENTE a apps_force_close con el mismo id: ya pide su propia confirmación formal, así que NO preguntes en texto si quiere forzarla. Si la app no está abierta, dilo y no la abras.
@@ -1290,6 +1291,8 @@ class Agent:
         if last.tool == "web.open" and data.get("ok") is True:
             url = args.get("url", "")
             return f"He abierto {url}." if covers(target, [url]) else None
+        if last.tool == OPEN_APPS_TOOL and not self._intent.asking_state(request):
+            return None  # mirar qué está abierto no cumple «cierra X»: sigue el modelo
         if (
             last.tool in ("media.control", "media.key", OPEN_APPS_TOOL)
             and data.get("ok") is True

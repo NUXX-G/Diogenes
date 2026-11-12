@@ -523,3 +523,14 @@ async def test_cerrar_con_un_id_de_otra_app_del_historial_usa_el_nombre_del_mens
         resultado = await agent.run("cierra el bloc de notas")
     assert resultado.steps[0].arguments["id"] == "bloc de notas"
     assert resultado.answer == "He cerrado Bloc de notas." and windows.windows == []
+
+
+async def test_si_el_modelo_mira_si_esta_abierta_en_vez_de_cerrar_el_turno_sigue(servidor_con_bloc: Any) -> None:
+    """Caso real (banco, 2026-11-12): «cierra la calculadora» → apps_abiertas → «Sí: está abierta», sin cerrarla."""
+    server, windows = servidor_con_bloc
+    llm = FakeLLM(llamar("apps_abiertas", nombre="bloc de notas"), llamar("apps_close", id="bloc de notas"))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]))
+        resultado = await agent.run("cierra el bloc de notas")
+    assert [s.tool for s in resultado.steps] == ["apps.abiertas", "apps.close"]
+    assert resultado.answer == "He cerrado Bloc de notas." and windows.windows == []
