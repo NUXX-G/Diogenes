@@ -263,7 +263,52 @@ def _present(output: str) -> str:
         return output
     status = [str(data.get("mensaje", ""))]
     status += [f"{k}={json.dumps(data[k])}" for k in ("url_cambio", "cambio_visible", "enter_ignorado") if k in data]
-    return " · ".join(s for s in status if s) + "\n" + data["pagina"]
+    return " · ".join(s for s in status if s) + "\n" + _short_page(data["pagina"])
+
+
+# Lo que ve el modelo de cada página. En la CPU del aula cada 1000 caracteres nuevos son ~9 s de leer el prompt, y una
+# página de YouTube llega a 3500: se recorta aquí (las recetas siguen viendo la página entera, en el resultado).
+MODEL_PAGE_CHARS = 1600
+MODEL_NAME_CHARS = 60
+MODEL_HREF_CHARS = 35
+_ELEMENT = re.compile(r'^(?P<head>\[[\w-]+\] [\w-]+)(?: "(?P<name>.*)")?(?: -> (?P<href>\S+))?(?P<tail>  \(.*)?$')
+_HIDDEN = re.compile(r"\[\.\.\. (\d+) elementos más")
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _short_line(line: str) -> str:
+    found = _ELEMENT.match(line)
+    if found is None:
+        return line
+    out = found["head"]
+    if found["name"] is not None:
+        out += f' "{_cut(found["name"], MODEL_NAME_CHARS)}"'
+    if found["href"]:
+        out += f" -> {_cut(found['href'], MODEL_HREF_CHARS)}"
+    return out + (found["tail"] or "")
+
+
+def _short_page(page: str, limit: int = MODEL_PAGE_CHARS) -> str:
+    """La página con nombres y enlaces recortados y, si aún no cabe, solo los primeros elementos (lo NUEVO va
+    delante, así que nunca se pierde un menú recién abierto)."""
+    out: list[str] = []
+    used, hidden = 0, 0
+    for i, line in enumerate(_short_line(raw) for raw in page.splitlines()):
+        if line.startswith("[... "):
+            continue
+        if i >= 3 and used + len(line) + 1 > limit:
+            hidden += 1
+            continue
+        out.append(line)
+        used += len(line) + 1
+    extra = _HIDDEN.search(page)
+    hidden += int(extra.group(1)) if extra else 0
+    if hidden:
+        out.append(f"[... {hidden} elementos más no mostrados]")
+    return "\n".join(out)
 
 
 CLAIM = re.compile(

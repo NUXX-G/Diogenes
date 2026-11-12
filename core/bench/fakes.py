@@ -120,7 +120,16 @@ class VideoSite:
     def videos(channel: str) -> list[tuple[str, int]]:
         names = ("directo de verano", "récord absoluto", "tutorial rápido", "respuesta a todo", "trailer")
         views = (1200, 98000, 5400, 300, 2100)
-        return [(f"{channel}: {n}", v) for n, v in zip(names, views, strict=True)]
+        listed = [(f"{channel}: {n}", v) for n, v in zip(names, views, strict=True)]
+        # como en la web de verdad, la lista sigue: títulos largos que hinchan la página
+        more = [
+            (
+                f"{channel}: episodio {i} de la temporada completa con invitados, preguntas y respuestas en directo",
+                50 + i,
+            )
+            for i in range(1, 26)
+        ]
+        return listed + more
 
     @staticmethod
     def slug(channel: str) -> str:
@@ -147,6 +156,14 @@ class VideoSite:
             links += [_Link("link", f"{q} - mejores momentos", "/watch?v=r1")]
             links += [channel] if channel else []
             links += [_Link("link", f"Reacción a {q}", "/watch?v=r2")]
+            links += [
+                _Link(
+                    "link",
+                    f"{q}: resultado {i} con un título largo de los que pone la gente para salir arriba",
+                    f"/watch?v=x{i}",
+                )
+                for i in range(1, 16)
+            ]
         elif path.startswith("/@"):
             slug = self._channel_of(path)
             self.title = f"{slug} - YouTube"

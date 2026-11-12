@@ -180,8 +180,7 @@ def plan_most_viewed(channel: str) -> Callable[[set[str]], list[Step]]:
         return lambda page: {"ref": ref_of(page, predicate)}
 
     return lambda _t: [
-        ("call", ("web_site_search", {"sitio": "YouTube", "consulta": channel})),
-        ("call", ("browser_snapshot", {})),
+        ("call", ("web_site_search", {"sitio": "YouTube", "consulta": channel})),  # ya trae la página
         ("call", ("browser_click", click(lambda line: "link" in line and "/@" in line))),
         ("call", ("browser_click", click(lambda line: 'tab "Vídeos"' in line))),
         ("call", ("browser_click", click(lambda line: 'button "Populares"' in line))),
@@ -201,7 +200,6 @@ TEACH_STEPS: tuple[tuple[str, list[Step]], ...] = (
         "abre el canal Hrom en youtube",
         [
             ("call", ("web_site_search", {"sitio": "YouTube", "consulta": "Hrom"})),
-            ("call", ("browser_snapshot", {})),
             _click(lambda line: "Hrom" in line and "/@" in line),
             ("say", "Estoy en el canal."),
         ],

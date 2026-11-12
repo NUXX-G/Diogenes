@@ -251,3 +251,17 @@ def test_la_consulta_real_se_codifica_en_la_plantilla() -> None:
     assert parse_qs(urlsplit(WebService._build_url("https://a.com/s?q={query}", "ñandú & co")).query) == {
         "q": ["ñandú & co"]
     }
+
+
+async def test_buscar_en_el_navegador_de_diogenes_devuelve_ya_la_pagina() -> None:
+    from core.bench.fakes import FakePC
+
+    pc = FakePC()
+    from mcp import Client
+
+    async with Client(pc.server()) as client:
+        res = await client.call_tool("web.site_search", {"sitio": "youtube", "consulta": "Hrom"})
+    import json
+
+    data = json.loads(res.content[0].text)  # type: ignore[union-attr]
+    assert "Ir al canal Hrom" in data["pagina"] and "sin pedir otro snapshot" in data["siguiente"]

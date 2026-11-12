@@ -147,5 +147,5 @@ async def test_con_recetas_y_la_de_hrom_ensenada_la_segunda_pasada_no_llama_al_m
 async def test_la_receta_ensenada_en_el_banco_llega_al_video_mas_visto() -> None:
     filas = await run(passes=1, recipes=True, teach=True)
     hrom = filas[-1]
-    assert hrom["herramientas"] == ["web.site_search", "browser.snapshot"] + ["browser.click"] * 4
+    assert hrom["herramientas"] == ["web.site_search"] + ["browser.click"] * 4
     assert hrom["respuesta"].startswith("Hecho como me enseñaste") and "récord absoluto" in hrom["respuesta"]

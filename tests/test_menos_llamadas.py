@@ -240,3 +240,13 @@ async def test_el_agente_ensena_solo_las_relevantes_si_se_pide() -> None:
     llm = FakeLLM(decir("vale"))
     await Agent(llm, backend, policy=POLICY, toolset=ToolSelector.load(RELEVANT)).run("hola")
     assert [t.name for t in llm.tools_seen[0]] == ["apps_open"]
+
+
+def test_el_modelo_ve_una_pagina_recortada_y_lo_nuevo_primero() -> None:
+    from core.agent import MODEL_PAGE_CHARS, _present
+
+    lineas = [f'[e{i}] link "{"vídeo larguísimo " * 8}{i}" -> /watch?v={"x" * 60}' for i in range(1, 80)]
+    pagina = "[CONTENIDO DE LA PÁGINA]\nurl: u\ntítulo: t\nNUEVO tras tu acción:\n" + "\n".join(lineas)
+    visto = _present(json.dumps({"ok": True, "mensaje": "Clic", "pagina": pagina}))
+    assert len(visto) < MODEL_PAGE_CHARS + 200 and "NUEVO tras tu acción" in visto
+    assert "[e1] link" in visto and "elementos más no mostrados" in visto and "x" * 60 not in visto

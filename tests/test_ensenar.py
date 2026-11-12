@@ -59,8 +59,7 @@ async def test_ensenado_con_un_canal_funciona_con_otro_sin_el_planificador() -> 
     assert pc.site.url.startswith("https://www.youtube.com/watch")
     assert "lofigirl: récord absoluto" in pc.site.title.lower()  # el más visto de ESE canal (98000 visualizaciones)
     assert [s.tool for s in resultado.steps] == [
-        "web.site_search",
-        "browser.snapshot",
+        "web.site_search",  # ya trae la página: no hace falta un snapshot
         "browser.click",
         "browser.click",
         "browser.click",
