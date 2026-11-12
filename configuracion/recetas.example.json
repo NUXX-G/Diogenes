@@ -1,0 +1,16 @@
+{
+  "_leeme": "Recetas y alias aprendidos. Palabras sin acentos ni mayúsculas. Las recetas y alias viven en data/diogenes.db (no versionado).",
+  "fallos_seguidos_para_desactivar": 3,
+  "fallos_para_olvidar_alias": 2,
+  "relleno": ["diogenes", "oye", "hey", "venga", "por favor", "porfa", "porfavor", "ahora", "gracias"],
+  "correcciones": [
+    "no", "eso no", "esa no", "ese no", "no era eso", "no es eso", "no es esa", "no es ese", "no queria eso", "mal",
+    "te has equivocado", "te equivocaste", "error", "incorrecto", "equivocado", "deshaz", "deshazlo", "otra no",
+    "wrong", "not that"
+  ],
+  "ordinales": {
+    "primero": 1, "primera": 1, "1": 1, "segundo": 2, "segunda": 2, "2": 2, "tercero": 3, "tercera": 3, "3": 3,
+    "cuarto": 4, "cuarta": 4, "quinto": 5, "quinta": 5
+  },
+  "solo_lectura": ["apps.search", "browser.snapshot", "browser.current", "media.sessions"]
+}
