@@ -135,7 +135,8 @@ async def test_limite_de_pasos_dice_que_intento() -> None:
     llm = FakeLLM(*[llamar("apps_search", nombre="x") for _ in range(3)])
     resultado = await Agent(llm, FakeBackend(), policy=POLICY, max_steps=3).run("bucle")
     assert not resultado.finished
-    assert "apps.search(nombre='x')" in resultado.answer
+    assert "la búsqueda de apps (nombre='x')" in resultado.answer
+    assert "apps.search" not in resultado.answer
 
 
 async def test_limite_de_tiempo(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -323,7 +323,7 @@ def test_decir_que_algo_no_existe_sin_haber_buscado_se_corrige(respuesta: str) -
     from core.agent import _grounded
 
     texto = _grounded(respuesta, [])
-    assert texto.startswith("No lo he comprobado") and "apps_search" in texto
+    assert texto.startswith("No lo he comprobado") and "apps_search" not in texto
 
 
 def test_tras_buscar_en_este_turno_la_ausencia_se_acepta() -> None:

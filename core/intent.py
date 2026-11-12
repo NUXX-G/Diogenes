@@ -35,6 +35,28 @@ PRONOUNS = frozenset(
     {"eso", "esto", "ese", "esa", "este", "esta", "ello", "misma", "mismo"}
 )  # no "lo"/"la": también son artículos
 CLITICS = ("selo", "sela", "los", "las", "lo", "la")  # ciérralo, ábrelo, ciérrala, ponlos, dáselo...
+# Palabras que rodean al objetivo de una orden sin formar parte de él ("diogenes, ábreme la X, por favor").
+FILLERS = frozenset(
+    {
+        "diogenes",
+        "me",
+        "te",
+        "que",
+        "el",
+        "la",
+        "los",
+        "las",
+        "un",
+        "una",
+        "a",
+        "al",
+        "por",
+        "favor",
+        "porfa",
+        "ya",
+        "y",
+    }
+)
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
 
 
@@ -143,6 +165,23 @@ class IntentGate:
                 if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
                     return True
         return False
+
+    def action_target(self, user_text: str) -> str | None:
+        """Si el mensaje pide una acción (abrir, cerrar, buscar, poner...), el objetivo sin el verbo ni los rellenos del
+        principio ni del final ("ábreme la calculadora" → "calculadora"); None si no pide ninguna o no nombra nada."""
+        words = normalize(user_text).split()
+        if not any(self._is_verb_word(w) for w in words):
+            return None
+        start = 0
+        while start < len(words) and (self._is_verb_word(words[start]) or words[start] in FILLERS):
+            start += 1
+        end = len(words)
+        while end > start and words[end - 1] in FILLERS:
+            end -= 1
+        target = words[start:end]
+        if not target or all(w in PRONOUNS for w in target):
+            return None  # "ábrelo", "abre eso": no hay nada que buscar (lo resuelve la conversación)
+        return " ".join(target)
 
     def _has_reference(self, words: list[str]) -> bool:
         """¿Hay un pronombre ("eso", "la misma") o un verbo con pronombre pegado ("ciérralo", "ábrelo")?"""
