@@ -304,3 +304,61 @@ def test_abrir_un_resultado_despues_de_ordenar_si_se_respeta() -> None:
     respuesta = "La más barata es la Palit a 575,95 €. He abierto el producto."
     pasos = [pagina_con_precios(), orden_barato(), navegar("https://tienda.com/producto/palit")]
     assert _grounded(respuesta, pasos) == respuesta
+
+
+# --- ausencias: "no existe" / "no se encontró" solo tras haberlo comprobado en este turno -------------------------
+
+
+@pytest.mark.parametrize(
+    "respuesta",
+    [
+        "No se encontró ninguna app llamada Paint.",
+        "No existe esa aplicación.",
+        "No hay ningún vídeo reproduciéndose.",
+        "No la he encontrado en el equipo.",
+        "No aparece en la lista.",
+    ],
+)
+def test_decir_que_algo_no_existe_sin_haber_buscado_se_corrige(respuesta: str) -> None:
+    from core.agent import _grounded
+
+    texto = _grounded(respuesta, [])
+    assert texto.startswith("No lo he comprobado") and "apps_search" not in texto
+
+
+def test_tras_buscar_en_este_turno_la_ausencia_se_acepta() -> None:
+    from core.agent import Step, _grounded
+
+    buscar = Step("apps.search", {"nombre": "paint"}, '{"ok": true, "mensaje": "0 resultados", "resultados": []}', True)
+    assert (
+        _grounded("No se encontró ninguna app llamada Paint.", [buscar]) == "No se encontró ninguna app llamada Paint."
+    )
+
+
+def test_un_cierre_que_dice_que_no_esta_abierta_tambien_comprueba() -> None:
+    from core.agent import Step, _grounded
+
+    cerrar = Step("apps.close", {"id": "paint"}, '{"ok": false, "mensaje": "Paint no está abierta"}', False)
+    assert _grounded("Paint no está abierta.", [cerrar]) == "Paint no está abierta."
+
+
+@pytest.mark.parametrize("resultado", ["ERROR: ConnectError: sin hands", "DENEGADO: el usuario no ha confirmado"])
+def test_una_herramienta_que_fallo_o_se_denego_no_comprueba_nada(resultado: str) -> None:
+    from core.agent import Step, _grounded
+
+    paso = Step("apps.search", {"nombre": "paint"}, resultado, False)
+    assert _grounded("No existe esa app.", [paso]).startswith("No lo he comprobado")
+
+
+def test_una_herramienta_que_no_comprueba_nada_no_cuenta_aunque_se_haya_llamado() -> None:
+    from core.agent import Step, _grounded
+
+    paso = Step("media.key", {"tecla": "play_pausa"}, '{"ok": true}', True)
+    assert _grounded("No hay ningún vídeo.", [paso]).startswith("No lo he comprobado")
+
+
+@pytest.mark.parametrize("respuesta", ["No hay problema, ya está.", "Hecho, no hay duda.", "No lo he abierto."])
+def test_frases_normales_con_no_hay_no_se_tocan(respuesta: str) -> None:
+    from core.agent import _grounded
+
+    assert _grounded(respuesta, []) == respuesta

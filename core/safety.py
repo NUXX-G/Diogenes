@@ -16,11 +16,14 @@ from typing import Any
 Confirm = Callable[[str, dict[str, Any]], Awaitable[bool]]
 
 CONFIG_DIR = Path("configuracion")
+# Siempre piden confirmación, aunque un confirmaciones.json antiguo o recortado no las liste.
+ALWAYS_CONFIRM = frozenset({"apps.force_close"})
+IRREVERSIBLE_REASONS = {"apps.force_close": "forzar el cierre pierde los cambios sin guardar"}
 
 
 class ConfirmationPolicy:
     def __init__(self, tools: Iterable[str]) -> None:
-        self._tools = frozenset(tools)
+        self._tools = frozenset(tools) | ALWAYS_CONFIRM
 
     @classmethod
     def load(cls, directory: Path = CONFIG_DIR) -> ConfirmationPolicy:
@@ -34,6 +37,11 @@ class ConfirmationPolicy:
 
     def requires(self, tool: str) -> bool:
         return tool in self._tools
+
+    @staticmethod
+    def reason(tool: str) -> str:
+        """Por qué esa herramienta se confirma siempre, para enseñárselo al usuario junto al resto de motivos."""
+        return IRREVERSIBLE_REASONS.get(tool, "es una acción irreversible")
 
     async def approve(self, tool: str, args: dict[str, Any], confirm: Confirm | None) -> bool:
         """Pregunta siempre al humano. Sin forma de preguntar, la respuesta es no."""

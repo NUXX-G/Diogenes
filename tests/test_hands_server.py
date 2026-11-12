@@ -33,7 +33,7 @@ def texto(result: Any) -> dict[str, Any]:
 async def test_herramientas_publicadas(index: AppIndex) -> None:
     async with Client(hands_server.build_server(index)) as client:
         nombres = {t.name for t in (await client.list_tools()).tools}
-    assert nombres == {"apps.search", "apps.launch"}
+    assert nombres == {"apps.search", "apps.launch", "system.panic"}
 
 
 async def test_buscar_y_lanzar(index: AppIndex, tmp_path: Path) -> None:
@@ -122,5 +122,7 @@ async def test_search_con_empate_ofrece_como_maximo_tres_opciones_numeradas() ->
 
 
 async def test_search_sin_resultados() -> None:
-    r = await buscar(AppIndex(), "zzzzqqq")
+    vacio = AppIndex()
+    vacio.replace([])  # cargado pero sin nada
+    r = await buscar(vacio, "zzzzqqq")
     assert r["ganador_claro"] is False and r["resultados"] == [] and "opciones" not in r

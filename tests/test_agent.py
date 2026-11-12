@@ -10,6 +10,7 @@ from mcp import Client
 
 from core.__main__ import repl
 from core.agent import Agent
+from core.intent import IntentGate
 from core.llm.base import LLMError, LLMResponse, Message, ToolCall, ToolSpec
 from core.mcp_client import McpTools
 from core.safety import ConfirmationPolicy
@@ -134,7 +135,8 @@ async def test_limite_de_pasos_dice_que_intento() -> None:
     llm = FakeLLM(*[llamar("apps_search", nombre="x") for _ in range(3)])
     resultado = await Agent(llm, FakeBackend(), policy=POLICY, max_steps=3).run("bucle")
     assert not resultado.finished
-    assert "apps.search(nombre='x')" in resultado.answer
+    assert "la búsqueda de apps (nombre='x')" in resultado.answer
+    assert "apps.search" not in resultado.answer
 
 
 async def test_limite_de_tiempo(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,7 +341,11 @@ async def test_llamadas_identicas_en_una_respuesta_se_ejecutan_una_vez() -> None
     bucle = LLMResponse("", tuple(ToolCall("apps_launch", {"id": "startapps:967ad27c"}) for _ in range(9)))
     backend = FakeBackend()
     llm = FakeLLM(bucle, decir("abierto"))
-    resultado = await Agent(llm, backend, policy=POLICY).run("abre el editor")
+    gate = IntentGate.load()
+    gate.observe(
+        "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:967ad27c", "nombre": "Editor"}]})
+    )
+    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor")
     assert backend.calls == [("apps.launch", {"id": "startapps:967ad27c"})]
     assert len(resultado.steps) == 1
     # el historial refleja lo que realmente se ejecutó, no las nueve copias

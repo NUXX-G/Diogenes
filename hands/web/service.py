@@ -16,7 +16,7 @@ from urllib.parse import quote_plus, urlsplit
 import httpx
 
 from hands.apps.models import normalize
-from hands.browser.service import BrowserService
+from hands.browser.service import BrowserService, BrowserUnavailable
 from hands.web.fetch import Fetcher, FetchResult
 from hands.web.opensearch import PLACEHOLDER
 from hands.web.store import TemplateStore
@@ -42,6 +42,18 @@ def _same_site(url_a: str, url_b: str) -> bool:
     """Mismo sitio = mismos dos últimos rótulos del host (suficiente para descartar dominios ajenos)."""
     a, b = urlsplit(url_a).hostname or "", urlsplit(url_b).hostname or ""
     return bool(a) and a.split(".")[-2:] == b.split(".")[-2:]
+
+
+def _with_warning(result: dict[str, Any], warning: str | None) -> dict[str, Any]:
+    """Si se abrió en el navegador del sistema por un fallo, el resultado lo dice y no se promete seguir con browser.*."""
+    if warning is None:
+        return result
+    result["aviso"] = warning
+    result["mensaje"] += (
+        f". AVISO: {warning}. Lo he abierto en el navegador del sistema; desde ahí no puedo seguir con browser_*."
+    )
+    result.pop("siguiente", None)
+    return result
 
 
 def open_in_browser(url: str) -> None:
@@ -89,26 +101,34 @@ class WebService:
             ]
         )
 
-    async def _show(self, url: str) -> str:
-        """Abre la URL en el Chrome de Diogenes (para poder seguir con browser.*) y, si no se puede, en el del sistema."""
+    async def _show(self, url: str) -> tuple[str, str | None]:
+        """Abre la URL en el Chrome de Diogenes (para poder seguir con browser.*) y, si no se puede, en el del sistema.
+
+        Devuelve dónde y, si hubo que recurrir al del sistema por un fallo, el motivo: nunca se cae en silencio."""
+        reason = None
         if self._browser is not None:
             try:
-                if (await self._browser.open(url)).get("ok"):
-                    return DIOGENES_BROWSER
-            except Exception:
+                result = await self._browser.open(url)
+                if result.get("ok"):
+                    return DIOGENES_BROWSER, None
+                reason = str(result.get("mensaje") or "no se pudo abrir la página")
+            except Exception as exc:
                 log.warning("no se pudo usar el navegador de Diogenes; se usa el del sistema", exc_info=True)
+                reason = f"{BrowserUnavailable.PREFIX}{type(exc).__name__}: {exc}"
         self._open(url)
-        return SYSTEM_BROWSER
+        return SYSTEM_BROWSER, reason
 
     async def open(self, url: str) -> dict[str, Any]:
         if not _is_http_url(url):
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
-        where = await self._show(url)
-        return {"ok": True, "mensaje": f"Abierto {url} en el {where}", "url": url, "abierto_en": where}
+        where, warning = await self._show(url)
+        result = {"ok": True, "mensaje": f"Abierto {url} en el {where}", "url": url, "abierto_en": where}
+        return _with_warning(result, warning)
 
-    def _found(self, site: str, url: str, origin: str, where: str) -> dict[str, Any]:
+    def _found(self, site: str, url: str, origin: str, shown: tuple[str, str | None]) -> dict[str, Any]:
+        where, warning = shown
         label = STRATEGY_LABELS.get(origin, origin)
-        return {
+        result = {
             "ok": True,
             "mensaje": f"Resultados de {site} abiertos en el {where} (estrategia: {label})",
             "url": url,
@@ -120,6 +140,7 @@ class WebService:
                 "ordenar, leer un dato), la página ya está abierta: sigue con browser_snapshot y browser_click."
             ),
         }
+        return _with_warning(result, warning)
 
     async def site_search(self, site: str, query: str) -> dict[str, Any]:
         key = _site_key(site)
@@ -129,9 +150,9 @@ class WebService:
         learned = self._store.get(key)
         if learned is not None:
             url = self._build_url(learned.template, query)
-            where = await self._show(url)
+            shown = await self._show(url)
             self._store.record_success(key)
-            return self._found(site, url, "aprendida", where)
+            return self._found(site, url, "aprendida", shown)
 
         page = await self._home(site)
         by_browser_only = False

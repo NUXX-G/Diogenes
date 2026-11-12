@@ -278,4 +278,4 @@ async def test_herramientas_web_publicadas_y_utilizables_por_mcp() -> None:
 async def test_sin_servicio_web_no_se_publican_herramientas_web() -> None:
     async with Client(build_server(AppIndex())) as client:
         nombres = {t.name for t in (await client.list_tools()).tools}
-    assert nombres == {"apps.search", "apps.launch"}
+    assert nombres == {"apps.search", "apps.launch", "system.panic"}

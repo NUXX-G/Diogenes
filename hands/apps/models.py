@@ -21,6 +21,7 @@ class AppEntry:
     source: str
     launch_kind: LaunchKind
     target: str
+    aliases: tuple[str, ...] = ()  # otros nombres con los que se la conoce (p. ej. el ejecutable: "notepad")
 
 
 def short_id(source: str, key: str) -> str:

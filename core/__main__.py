@@ -9,16 +9,14 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
-from typing import Any
 
 from dotenv import load_dotenv
 
-from core.agent import Agent, Step
-from core.llm.base import LLMError
-from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_MODEL, OllamaProvider
+from core.agent import PANIC_TOOL, Agent, Step
+from core.hotkey import HotkeyListener, load_combo
+from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, OllamaProvider
 from core.mcp_client import connect_hands
-
-SALIR = {"salir", "exit", "quit"}
+from core.session import Session
 
 
 def format_step(step: Step) -> str:
@@ -38,26 +36,9 @@ async def repl(
     agent: Agent,
     read: Callable[[], Awaitable[str]],
     write: Callable[[str], None],
+    session: Session | None = None,
 ) -> None:
-    while True:
-        try:
-            line = (await read()).strip()
-        except EOFError:
-            return
-        if not line:
-            continue
-        if line.lower() in SALIR:
-            return
-        if line.lower() == "/nuevo":
-            agent.reset()
-            write("Conversación reiniciada.")
-            continue
-        try:
-            result = await agent.run(line)
-        except LLMError as exc:
-            write(f"Error del modelo: {exc}")
-            continue
-        write(f"{result.answer}  ({len(result.steps)} acciones · {result.seconds:.1f} s)")
+    await (session or Session(write)).serve(agent, read)
 
 
 async def amain() -> int:
@@ -73,11 +54,8 @@ async def amain() -> int:
     llm = OllamaProvider(
         os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
         os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
+        keep_alive=os.environ.get("DIOGENES_OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
     )
-
-    async def confirm(tool: str, args: dict[str, Any]) -> bool:
-        answer = await asyncio.to_thread(input, f"  ⚠ Confirmar {tool}({args})? [s/N] ")
-        return answer.strip().lower() in {"s", "si", "sí", "y", "yes"}
 
     async def read() -> str:
         return await asyncio.to_thread(input, "> ")
@@ -93,11 +71,20 @@ async def amain() -> int:
                 file=sys.stderr,
             )
             return 1
-        agent = Agent(llm, tools, confirm=confirm, on_step=lambda s: print(format_step(s)))
+        session = Session(print, release=lambda: tools.call(PANIC_TOOL, {}))
+        agent = Agent(llm, tools, confirm=session.confirm, on_step=lambda s: print(format_step(s)))
+        loop = asyncio.get_running_loop()
+        combo = load_combo()
+        hotkey = HotkeyListener(combo, lambda: loop.call_soon_threadsafe(session.panic))
         print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar o '/nuevo' para olvidar la conversación.")
+        if hotkey.start():
+            print(f"Botón del pánico: {combo} o /parar (también /para).")
+        else:
+            print(f"AVISO: no he podido registrar {combo} (¿lo usa otro programa?). Para cancelar, escribe /parar.")
         try:
-            await repl(agent, read, print)
+            await repl(agent, read, print, session)
         finally:
+            hotkey.stop()
             await llm.aclose()
     return 0
 

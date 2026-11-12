@@ -17,7 +17,7 @@ def servidor_con_spotify():
 async def test_lista_herramientas_con_esquema() -> None:
     async with Client(servidor_con_spotify()) as client:
         tools = {t.name: t for t in await McpTools(client).tools()}
-    assert set(tools) == {"apps.search", "apps.launch"}
+    assert set(tools) == {"apps.search", "apps.launch", "system.panic"}
     assert "nombre" in tools["apps.search"].parameters["properties"]
 
 

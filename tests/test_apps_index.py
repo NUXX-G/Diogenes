@@ -96,13 +96,20 @@ def test_discover_une_fuentes_y_una_caida_no_tumba_a_las_demas(
     monkeypatch.setattr(discovery.registry, "read_app_paths", lambda: [("a.exe", r"C:\a.exe")])
     monkeypatch.setattr(discovery.steam, "find_root", lambda: None)
     monkeypatch.setattr(discovery.epic, "manifests_dir", lambda: discovery.Path("no-existe"))
+    monkeypatch.setattr(discovery.folders, "resolve", dict)  # sin carpetas ni escritorio del PC real
+    monkeypatch.setattr(discovery.desktop, "roots", list)
 
     def powershell(_command: str) -> str:
         raise OSError("PowerShell no disponible")
 
     with caplog.at_level(logging.WARNING):
         entradas = discovery.discover(powershell)
-    assert [e.source for e in entradas] == ["registry"]
+    assert [e.source for e in entradas] == [
+        "registry",
+        "carpetas",
+        "carpetas",
+        "carpetas",
+    ]  # y los 3 nombres de la Papelera
     assert "startapps" in caplog.text
 
 

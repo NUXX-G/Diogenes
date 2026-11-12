@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import threading
@@ -14,15 +15,16 @@ from rapidfuzz import fuzz, process
 from hands.apps.models import AppEntry, normalize
 
 # Si dos fuentes dan la misma app, gana la primera: es la que Windows o el cliente de juegos usan de verdad.
-PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "registry")
+PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "carpetas", "desktop", "registry")
 # Fuentes con interfaz propia. `registry` (App Paths) son ejecutables sueltos, a menudo de consola o de apoyo.
-CON_INTERFAZ = frozenset({"startapps", "steam", "epic", "startmenu"})
+CON_INTERFAZ = frozenset({"startapps", "steam", "epic", "startmenu", "carpetas", "desktop"})
 # Con WRatio el ruido (nombres cortos que "contienen" la consulta) llega a ~67; los aciertos reales, a 90+.
 SCORE_MINIMO = 72.0
 # Diferencia de puntuación a partir de la cual, con el resto igual, hay un ganador claro.
 MARGEN_CLARO = 5.0
 
 EXACTA, PREFIJO, DIFUSA = 0, 1, 2
+ALIAS_SEP = "#"
 
 log = logging.getLogger(__name__)
 
@@ -85,11 +87,20 @@ def hay_ganador_claro(resultados: Sequence[Resultado]) -> bool:
 class AppIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._ready = threading.Event()  # se activa con la primera carga, de la caché o del descubrimiento
         self._entries: dict[str, AppEntry] = {}
         self._names: dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    @property
+    def ready(self) -> bool:
+        return self._ready.is_set()
+
+    async def wait_ready(self, timeout: float) -> bool:
+        """Espera a la primera carga sin bloquear el bucle de eventos. False si no llegó a tiempo."""
+        return self._ready.is_set() or await asyncio.to_thread(self._ready.wait, timeout)
 
     def replace(self, entries: Iterable[AppEntry]) -> None:
         """Sustituye el contenido, quedándose con una sola entrada por nombre normalizado."""
@@ -100,9 +111,25 @@ class AppIndex:
             if actual is None or _prioridad(entry.source) < _prioridad(actual.source):
                 best[key] = entry
         by_id = _resolver_colisiones(best.values())
+        # Cada alias es otra clave de búsqueda de la misma entrada: "<id>#<n>"
         names = {e.id: normalize(e.name) for e in by_id.values()}
+        for e in by_id.values():
+            for n, alias in enumerate(e.aliases):
+                if normalize(alias):
+                    names[f"{e.id}{ALIAS_SEP}{n}"] = normalize(alias)
         with self._lock:
             self._entries, self._names = by_id, names
+        self._ready.set()
+
+    def refresh_source(self, source: str, entries: Iterable[AppEntry]) -> bool:
+        """Cambia solo las entradas de una fuente (p. ej. el escritorio) sin rehacer todo el descubrimiento.
+        Devuelve True si cambió algo."""
+        fresh = list(entries)
+        current = [e for e in self._entries.values() if e.source == source]
+        if {(e.id, e.name) for e in current} == {(e.id, e.name) for e in fresh}:
+            return False
+        self.replace([*(e for e in self._entries.values() if e.source != source), *fresh])
+        return True
 
     def get(self, app_id: str) -> AppEntry | None:
         return self._entries.get(app_id)
@@ -116,7 +143,14 @@ class AppIndex:
         with self._lock:
             entries, names = self._entries, self._names
         matches = process.extract(wanted, names, scorer=fuzz.WRatio, limit=None, score_cutoff=score_minimo)
-        resultados = [Resultado(entries[app_id], score, _tier(wanted, names[app_id])) for _n, score, app_id in matches]
+        best: dict[str, Resultado] = {}  # una entrada puede casar por su nombre y por un alias: cuenta la mejor
+        for _n, score, key in matches:
+            app_id = key.split(ALIAS_SEP, 1)[0]
+            found = Resultado(entries[app_id], score, _tier(wanted, names[key]))
+            current = best.get(app_id)
+            if current is None or (found.tier, -found.score) < (current.tier, -current.score):
+                best[app_id] = found
+        resultados = list(best.values())
         resultados.sort(
             key=lambda r: (
                 0 if r.tier <= PREFIJO else 1,

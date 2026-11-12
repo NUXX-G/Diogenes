@@ -1,0 +1,48 @@
+{
+  "boton_panico": "ctrl+alt+esc",
+  "relleno": ["diogenes", "oye", "hey", "venga", "por favor", "porfa", "porfavor", "ahora", "gracias"],
+  "teclas": {
+    "play_pausa": {
+      "frases": [
+        "pausa", "pausar", "pausa la musica", "pausa la cancion", "pon pausa", "para la musica", "para la cancion",
+        "play", "pon play", "dale al play", "reproduce", "continua", "continua la musica", "reanuda", "reanudar",
+        "reanuda la musica", "quita la pausa", "play pausa", "pause", "resume"
+      ]
+    },
+    "siguiente": {
+      "frases": [
+        "siguiente", "siguiente cancion", "siguiente tema", "la siguiente", "pasa", "pasa la cancion", "salta",
+        "salta la cancion", "cambia de cancion", "next", "next song", "skip"
+      ]
+    },
+    "anterior": {
+      "frases": [
+        "anterior", "cancion anterior", "tema anterior", "la anterior", "vuelve a la anterior", "atras",
+        "pon la anterior", "previous", "previous song"
+      ]
+    },
+    "parar": {
+      "frases": ["para", "stop", "detener", "detén la musica", "deten la musica"]
+    },
+    "subir_volumen": {
+      "veces": 5,
+      "frases": [
+        "sube el volumen", "subir volumen", "sube volumen", "mas volumen", "volumen arriba", "sube la musica",
+        "mas alto", "volume up", "sube un poco el volumen"
+      ]
+    },
+    "bajar_volumen": {
+      "veces": 5,
+      "frases": [
+        "baja el volumen", "bajar volumen", "baja volumen", "menos volumen", "volumen abajo", "baja la musica",
+        "mas bajo", "volume down", "baja un poco el volumen"
+      ]
+    },
+    "silencio": {
+      "frases": [
+        "silencio", "silencia", "silenciar", "silencia el sonido", "mutea", "mutear", "mute", "quita el sonido",
+        "quita el volumen"
+      ]
+    }
+  }
+}

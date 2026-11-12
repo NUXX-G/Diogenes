@@ -43,7 +43,9 @@ class FakePage:
         multiline: set[str] | None = None,
         navigates: bool = True,
         on_click: dict[str, str] | None = None,
+        hrefs: dict[str, str] | None = None,
     ) -> None:
+        self._hrefs = hrefs or {}  # ref → href real del DOM ("" si no es un enlace)
         self._aria = aria
         self._sensitive = sensitive or set()
         self._multiline = multiline or set()
@@ -77,6 +79,9 @@ class FakePage:
 
     async def is_multiline(self, ref: str) -> bool:
         return ref in self._multiline
+
+    async def href(self, ref: str) -> str:
+        return self._hrefs.get(ref, "")
 
     async def back(self) -> None:
         self.calls.append(("back",))

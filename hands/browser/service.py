@@ -11,17 +11,42 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from hands.browser import snapshot
 from hands.browser.rules import BrowserRules
+from hands.web.domains import host_of, registrable
 
 STOP = "Me paro aquí y te lo paso a ti: no relleno contraseñas ni datos de pago, ni completo compras."
 UNKNOWN_REF = "ref desconocido: {ref}. Llama a browser_snapshot y usa un ref de la lista."
+
+
+class BrowserUnavailable(Exception):
+    """El navegador de Diogenes no se puede usar. El mensaje ya dice el motivo, listo para enseñárselo al usuario."""
+
+    PREFIX = "el navegador de Diogenes no está disponible: "
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason if reason.startswith(self.PREFIX) else self.PREFIX + reason)
+
+
+def _stop_if_unavailable(method: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
+    """Sin navegador, la herramienta lo dice claro (y `parar`: reintentar no sirve) en vez de fallar a medias."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return await method(self, *args, **kwargs)
+        except BrowserUnavailable as exc:
+            return {"ok": False, "parar": True, "mensaje": str(exc)}
+
+    return wrapper
 
 
 class ClickIntercepted(Exception):
@@ -36,11 +61,13 @@ class BrowserPage(Protocol):
     async def fill(self, ref: str, text: str, enter: bool) -> None: ...
     async def is_sensitive(self, ref: str) -> bool: ...
     async def is_multiline(self, ref: str) -> bool: ...
+    async def href(self, ref: str) -> str: ...
     async def back(self) -> None: ...
 
 
 class PageProvider(Protocol):
     async def page(self) -> BrowserPage: ...
+    async def release(self) -> None: ...
 
 
 def _is_http_url(url: str) -> bool:
@@ -91,6 +118,15 @@ class BrowserService:
         self._signatures: frozenset[tuple[str, str]] = frozenset()  # (rol, nombre) de la última página
         self._last_url = ""
 
+    async def release(self) -> None:
+        """Botón del pánico: olvida la página y suelta la conexión. Las ventanas siguen abiertas."""
+        self._nodes = {}
+        self._form_dirty = False
+        self._digest = None
+        self._signatures = frozenset()
+        self._last_url = ""
+        await self._provider.release()
+
     async def _state(self, page: BrowserPage) -> dict[str, Any]:
         url, title = await page.current()
         return {"url": url, "titulo": title}
@@ -113,6 +149,7 @@ class BrowserService:
             "pagina": snapshot.compact(text, url=state["url"], title=state["titulo"], previous=previous),
         }
 
+    @_stop_if_unavailable
     async def open(self, url: str) -> dict[str, Any]:
         if not _is_http_url(url):
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
@@ -126,26 +163,31 @@ class BrowserService:
         seen.pop("cambio_visible")
         return {"ok": True, "mensaje": f"Abierto {url}", **seen}
 
+    @_stop_if_unavailable
     async def snapshot(self) -> dict[str, Any]:
         page = await self._provider.page()
         seen = await self._observe(page)
         seen.pop("cambio_visible")
         return {"ok": True, "mensaje": f"{len(self._nodes)} elementos", **seen}
 
+    @_stop_if_unavailable
     async def click(self, ref: str, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
         if node is None:
             return {"ok": False, "mensaje": UNKNOWN_REF.format(ref=ref)}
         if self._rules.payment_term(node.role, node.name):
             return {"ok": False, "parar": True, "mensaje": STOP}
+        page = await self._provider.page()
+        before = (await page.current())[0]
         if not confirmado:
             verb = self._rules.irreversible_term(node.role, node.name)
             if verb:
                 return _confirmation("browser.click", ref, node.name, f"acción irreversible ({verb})")
             if self._form_dirty and node.role == "button":
                 return _confirmation("browser.click", ref, node.name, "envío de un formulario que he rellenado")
-        page = await self._provider.page()
-        before = (await page.current())[0]
+            if external := await self._external_link(page, node, before):
+                motivo = f"el enlace lleva a otro dominio ({registrable(host_of(external))})"
+                return {**_confirmation("browser.click", ref, external, motivo), "destino_externo": external}
         seen_before = self._digest
         closed = ""
         try:
@@ -182,6 +224,20 @@ class BrowserService:
             **seen,
         }
 
+    @staticmethod
+    async def _external_link(page: BrowserPage, node: snapshot.Node, here: str) -> str:
+        """URL absoluta del enlace si lleva a otro dominio, o ''. Manda el href vivo: el del snapshot puede haber cambiado."""
+        try:
+            href = await page.href(node.ref)
+        except Exception:  # noqa: BLE001
+            href = ""
+        target = urljoin(here, href or node.href)
+        here_host, target_host = host_of(here), host_of(target)
+        if not here_host or not target_host or registrable(here_host) == registrable(target_host):
+            return ""
+        return target
+
+    @_stop_if_unavailable
     async def type(self, ref: str, text: str, enter: bool = False, confirmado: bool = False) -> dict[str, Any]:
         node = self._nodes.get(ref)
         if node is None:
@@ -247,7 +303,8 @@ class BrowserService:
         deadline = time.monotonic() + wait
         clicked = 0
         while True:
-            await self.snapshot()
+            if not (await self.snapshot()).get("ok"):
+                return None  # sin navegador no hay buscador que esperar
             field = self._search_field()
             if field is not None:
                 return field.ref
@@ -268,6 +325,7 @@ class BrowserService:
                 return None
             await asyncio.sleep(1.0)
 
+    @_stop_if_unavailable
     async def back(self) -> dict[str, Any]:
         page = await self._provider.page()
         await page.back()
@@ -276,6 +334,7 @@ class BrowserService:
         seen.pop("cambio_visible")
         return {"ok": True, "mensaje": "Atrás", **seen}
 
+    @_stop_if_unavailable
     async def current(self) -> dict[str, Any]:
         page = await self._provider.page()
         return {"ok": True, "mensaje": "Estado actual", **await self._state(page)}

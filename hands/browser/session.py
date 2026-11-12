@@ -16,12 +16,14 @@ from pathlib import Path
 
 import httpx
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from hands.browser.service import ClickIntercepted
+from hands.browser.service import BrowserUnavailable, ClickIntercepted
 
 DEFAULT_PORT = 9222
 DEFAULT_PROFILE = Path("data/browser-profile")
+RELEASE_TIMEOUT_SECONDS = 3.0
 _CANDIDATES = {
     "chrome": [r"%ProgramFiles%\Google\Chrome\Application\chrome.exe", r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe", r"%LocalAppData%\Google\Chrome\Application\chrome.exe"],
     "edge": [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe", r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"],
@@ -117,6 +119,12 @@ class PlaywrightPage:
         except Exception:  # noqa: BLE001
             return False
 
+    async def href(self, ref: str) -> str:
+        """Destino absoluto del enlace que contiene al elemento, leído del DOM en este momento."""
+        page = await self._live()
+        script = "e => { const a = e.closest('a[href]'); return a ? a.href : ''; }"
+        return str(await page.locator(f"aria-ref={ref}").evaluate(script, timeout=3_000))
+
     async def back(self) -> None:
         page = await self._live()
         await page.go_back(wait_until="domcontentloaded", timeout=10_000)
@@ -126,6 +134,33 @@ class PlaywrightPage:
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("domcontentloaded", timeout=5_000)
         await asyncio.sleep(0.4)
+
+
+def driver_problem() -> str | None:
+    """Por qué no puede arrancar el driver de Playwright (un `node.exe` dentro del paquete), o None si parece estar bien."""
+    try:
+        from playwright._impl._driver import compute_driver_executable
+
+        node = Path(compute_driver_executable()[0])
+    except Exception as exc:  # noqa: BLE001
+        return f"no encuentro el driver de Playwright ({type(exc).__name__}: {exc})"
+    if not node.is_file():
+        return f"falta {node}: el entorno de Python está incompleto; reinstálalo con uv sync"
+    return None
+
+
+def explain_start_failure(exc: BaseException) -> str:
+    """Motivo legible de que `async_playwright().start()` fallase: driver ausente, bloqueado por la política u otro."""
+    if missing := driver_problem():
+        return missing
+    if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {5, 1260, 4551}:
+        return f"Windows no deja ejecutar el driver de Playwright (¿política de control de aplicaciones?): {exc}"
+    if isinstance(exc, FileNotFoundError):
+        return (
+            "no puedo lanzar el driver de Playwright aunque el archivo existe (¿lo bloquea la política de control "
+            f"de aplicaciones del centro o un antivirus?): {exc}"
+        )
+    return f"Playwright no arranca ({type(exc).__name__}: {exc})"
 
 
 class BrowserSession:
@@ -140,6 +175,11 @@ class BrowserSession:
         self._lock = asyncio.Lock()
 
     @property
+    def pid(self) -> int | None:
+        """PID del navegador que lanzó Diogenes, si sigue abierto (si no lo lanzó él, no es suyo y no se protege)."""
+        return self._proc.pid if self._proc is not None and self._proc.poll() is None else None
+
+    @property
     def _endpoint(self) -> str:
         return f"http://127.0.0.1:{self._port}"
 
@@ -147,15 +187,27 @@ class BrowserSession:
         async with self._lock:
             if self._page is not None and self._browser is not None and self._browser.is_connected():
                 return self._page
-            self._pw = self._pw or await async_playwright().start()
-            if not await self._alive():
-                self._start()
-                await self._wait_alive()
-            self._browser = await self._pw.chromium.connect_over_cdp(self._endpoint)
-            context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-            page = context.pages[0] if context.pages else await context.new_page()
-            self._page = PlaywrightPage(context, page)
-            return self._page
+            try:
+                return await self._connect()
+            except BrowserUnavailable:
+                raise
+            except (OSError, RuntimeError, PlaywrightError) as exc:
+                raise BrowserUnavailable(f"{type(exc).__name__}: {exc}") from exc
+
+    async def _connect(self) -> PlaywrightPage:
+        if self._pw is None:
+            try:
+                self._pw = await async_playwright().start()
+            except Exception as exc:
+                raise BrowserUnavailable(explain_start_failure(exc)) from exc
+        if not await self._alive():
+            self._start()
+            await self._wait_alive()
+        self._browser = await self._pw.chromium.connect_over_cdp(self._endpoint)
+        context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+        page = context.pages[0] if context.pages else await context.new_page()
+        self._page = PlaywrightPage(context, page)
+        return self._page
 
     async def _alive(self) -> bool:
         try:
@@ -166,12 +218,17 @@ class BrowserSession:
 
     def _start(self) -> None:
         if sys.platform != "win32":
-            raise RuntimeError("Lanzar el navegador solo está soportado en Windows; conecta uno ya abierto por CDP.")
+            raise BrowserUnavailable("lanzarlo solo está soportado en Windows; conecta uno ya abierto por CDP")
         executable = find_browser(self._preferred)
         if executable is None:
-            raise RuntimeError("No encuentro Chrome ni Edge instalados.")
+            raise BrowserUnavailable("no encuentro Chrome ni Edge instalados")
         self._profile.mkdir(parents=True, exist_ok=True)
-        self._proc = subprocess.Popen(launch_args(executable, self._profile, self._port))
+        try:
+            self._proc = subprocess.Popen(launch_args(executable, self._profile, self._port))
+        except OSError as exc:
+            raise BrowserUnavailable(
+                f"no he podido lanzar {executable} ({exc}); ¿lo bloquea la política del centro?"
+            ) from exc
 
     async def _wait_alive(self, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
@@ -179,7 +236,20 @@ class BrowserSession:
             if await self._alive():
                 return
             await asyncio.sleep(0.3)
-        raise RuntimeError("El navegador no abrió el puerto de depuración a tiempo.")
+        raise BrowserUnavailable("el navegador no abrió el puerto de depuración a tiempo")
+
+    async def release(self) -> None:
+        """Corta la conexión de Playwright sin cerrar ventanas; la siguiente acción vuelve a conectarse.
+
+        No toma `_lock`: tiene que funcionar aunque otra llamada lleve segundos esperando al navegador. Parar Playwright
+        interrumpe además cualquier orden que siguiera en vuelo. El navegador es un proceso aparte y sigue abierto.
+        """
+        playwright, self._pw = self._pw, None
+        self._browser = None
+        self._page = None
+        if playwright is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(playwright.stop(), RELEASE_TIMEOUT_SECONDS)
 
     async def aclose(self) -> None:
         if self._pw is not None:
