@@ -14,6 +14,7 @@ from typing import Any
 
 from core.agent import Agent, AgentResult
 from core.llm.base import LLMError
+from core.metrics import MetricsLog, describe
 
 log = logging.getLogger(__name__)
 
@@ -26,8 +27,17 @@ RELEASE_TIMEOUT_SECONDS = 5.0
 
 
 class Session:
-    def __init__(self, write: Callable[[str], None], release: Callable[[], Awaitable[Any]] | None = None) -> None:
+    def __init__(
+        self,
+        write: Callable[[str], None],
+        release: Callable[[], Awaitable[Any]] | None = None,
+        *,
+        metrics: MetricsLog | None = None,
+        show_metrics: bool = False,
+    ) -> None:
         self._write = write
+        self._metrics = metrics  # una línea JSON por turno en logs/
+        self._show_metrics = show_metrics  # y otra legible en la consola
         self._release = release  # suelta lo que retenga hands (el navegador), sin cerrar ventanas
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._current: asyncio.Task[AgentResult] | None = None
@@ -87,6 +97,10 @@ class Session:
         else:
             result = task.result()
             self._write(f"{result.answer}  ({len(result.steps)} acciones · {result.seconds:.1f} s)")
+            if self._show_metrics:
+                self._write(f"  {describe(result.metrics)}")
+            if self._metrics is not None:
+                self._metrics.record(result.metrics)
 
     async def _work(self, agent: Agent) -> None:
         while True:

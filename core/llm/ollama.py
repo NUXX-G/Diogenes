@@ -7,12 +7,14 @@ from typing import Any
 
 import httpx
 
-from core.llm.base import LLMError, LLMResponse, Message, ToolCall, ToolSpec
+from core.llm.base import LLMError, LLMResponse, LLMUsage, Message, ToolCall, ToolSpec
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3:4b-instruct"
 # Ollama descarga el modelo a los 5 min sin uso y recargarlo cuesta ~85 s en la CPU del aula: se mantiene más tiempo.
 DEFAULT_KEEP_ALIVE = "30m"
+# Cambiar num_ctx entre peticiones obliga a Ollama a recargar el modelo: se fija al arrancar y no se toca después.
+DEFAULT_NUM_CTX = 8192
 
 
 def _message_to_wire(m: Message) -> dict[str, Any]:
@@ -44,7 +46,7 @@ class OllamaProvider:
         model: str = DEFAULT_MODEL,
         *,
         temperature: float = 0.2,
-        num_ctx: int = 8192,
+        num_ctx: int = DEFAULT_NUM_CTX,
         max_tokens: int = 512,
         timeout: float = 300.0,
         keep_alive: str = DEFAULT_KEEP_ALIVE,
@@ -76,12 +78,18 @@ class OllamaProvider:
             raise LLMError(f"Ollama no tiene el modelo '{self.model}'. Descárgalo con: ollama pull {self.model}")
         if response.status_code >= 400:
             raise LLMError(f"Ollama devolvió {response.status_code}: {response.text[:200]}")
-        message = response.json().get("message", {})
+        data = response.json()
+        message = data.get("message", {})
         calls = tuple(
             ToolCall(c["function"]["name"], _arguments(c["function"].get("arguments")))
             for c in message.get("tool_calls") or []
         )
-        return LLMResponse(message.get("content") or "", calls)
+        usage = LLMUsage(
+            int(data.get("prompt_eval_count") or 0),
+            int(data.get("eval_count") or 0),
+            float(data.get("load_duration") or 0) / 1e9,
+        )
+        return LLMResponse(message.get("content") or "", calls, usage)
 
     async def aclose(self) -> None:
         await self._client.aclose()

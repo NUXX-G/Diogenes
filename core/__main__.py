@@ -9,13 +9,15 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from core.agent import PANIC_TOOL, Agent, Step
 from core.hotkey import HotkeyListener, load_combo
-from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, OllamaProvider
+from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaProvider
 from core.mcp_client import connect_hands
+from core.metrics import MetricsLog
 from core.session import Session
 
 
@@ -55,6 +57,7 @@ async def amain() -> int:
         os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
         os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
         keep_alive=os.environ.get("DIOGENES_OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
+        num_ctx=int(os.environ.get("DIOGENES_OLLAMA_NUM_CTX", DEFAULT_NUM_CTX)),
     )
 
     async def read() -> str:
@@ -71,7 +74,12 @@ async def amain() -> int:
                 file=sys.stderr,
             )
             return 1
-        session = Session(print, release=lambda: tools.call(PANIC_TOOL, {}))
+        session = Session(
+            print,
+            release=lambda: tools.call(PANIC_TOOL, {}),
+            metrics=MetricsLog(Path("logs")),
+            show_metrics=os.environ.get("DIOGENES_TIEMPOS", "1") != "0",
+        )
         agent = Agent(llm, tools, confirm=session.confirm, on_step=lambda s: print(format_step(s)))
         loop = asyncio.get_running_loop()
         combo = load_combo()

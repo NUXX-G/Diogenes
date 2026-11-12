@@ -32,9 +32,20 @@ class Message:
 
 
 @dataclass(frozen=True)
+class LLMUsage:
+    """Lo que costó una llamada según el proveedor. `input_tokens` son los que evaluó de verdad: con la caché de prefijo
+    de Ollama, la parte del prompt que ya tenía calculada (sistema, herramientas, historial) no cuenta."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    load_seconds: float = 0.0  # cargar el modelo en memoria (solo en frío)
+
+
+@dataclass(frozen=True)
 class LLMResponse:
     content: str
     tool_calls: tuple[ToolCall, ...] = field(default_factory=tuple)
+    usage: LLMUsage | None = None
 
 
 class LLMProvider(Protocol):

@@ -17,8 +17,9 @@ from urllib.parse import urlsplit
 
 from core.choices import PendingChoice, ask_again, is_affirmation, parse_options, resolve
 from core.intent import IntentGate
-from core.llm.base import LLMProvider, Message, ToolCall, ToolSpec
+from core.llm.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from core.mcp_client import ToolBackend
+from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
 from core.router import Router
 from core.safety import Confirm, ConfirmationPolicy
 
@@ -110,6 +111,7 @@ class AgentResult:
     steps: list[Step] = field(default_factory=list)
     finished: bool = True  # False si se paró por límite de pasos o de tiempo
     seconds: float = 0.0
+    metrics: TurnMetrics = field(default_factory=TurnMetrics)
 
 
 def _wire_names(specs: list[ToolSpec]) -> tuple[list[ToolSpec], dict[str, str]]:
@@ -581,6 +583,7 @@ class Agent:
         self._pending: PendingChoice | None = None
         self._last_user = ""  # lo que el usuario pidió en el turno anterior
         self._last_answer = ""  # y lo que el agente contestó (para un "sí" a su pregunta)
+        self._turn = TurnMetrics()  # tiempos del turno en curso
 
     def reset(self) -> None:
         self._history.clear()
@@ -594,9 +597,43 @@ class Agent:
 
     async def run(self, request: str) -> AgentResult:
         started = time.monotonic()
+        self._turn = TurnMetrics()
+        result = await self._run(request, started)
+        result.seconds = time.monotonic() - started
+        self._turn.seconds = result.seconds
+        result.metrics = self._turn
+        return result
+
+    async def _chat(self, messages: list[Message], specs: list[ToolSpec]) -> LLMResponse:
+        clock = Stopwatch()
+        response = await self._llm.chat(messages, specs)
+        usage = response.usage
+        self._turn.model_calls.append(
+            ModelCall(
+                clock.seconds(),
+                usage.input_tokens if usage else 0,
+                usage.output_tokens if usage else 0,
+                len(specs),
+                usage.load_seconds if usage else 0.0,
+            )
+        )
+        return response
+
+    async def _call(self, name: str, arguments: dict[str, Any]) -> str:
+        clock = Stopwatch()
+        ok = False
+        try:
+            output = await self._backend.call(name, arguments)
+            ok = _salio_bien(output)
+            return output
+        finally:
+            self._turn.tools.append(ToolTiming(name, clock.seconds(), ok))
+
+    async def _run(self, request: str, started: float) -> AgentResult:
         specs, to_mcp = _wire_names(await self._backend.tools())
 
         if self._pending is None and (answer := await self._shortcut(request, to_mcp, started)) is not None:
+            self._turn.route = "atajo"
             return answer
 
         pending = self._pending
@@ -625,7 +662,6 @@ class Agent:
         except BaseException:
             del self._history[turn_start:]  # un turno a medias dejaría el historial incoherente
             raise
-        result.seconds = time.monotonic() - started
         self._last_answer = result.answer
         return result
 
@@ -635,7 +671,7 @@ class Agent:
         if shortcut is None or shortcut.tool not in to_mcp.values():
             return None
         try:
-            output = await self._backend.call(shortcut.tool, dict(shortcut.arguments))
+            output = await self._call(shortcut.tool, dict(shortcut.arguments))
         except Exception as exc:  # noqa: BLE001
             output = f"ERROR: {type(exc).__name__}: {exc}"
         step = Step(shortcut.tool, dict(shortcut.arguments), output, _salio_bien(output))
@@ -682,7 +718,7 @@ class Agent:
             if time.monotonic() - started > self._max_seconds:
                 break
             await asyncio.sleep(0)  # punto de cancelación en cada vuelta, aunque nada más ceda el control
-            response = await self._llm.chat([Message("system", SYSTEM_PROMPT), *self._history], specs)
+            response = await self._chat([Message("system", SYSTEM_PROMPT), *self._history], specs)
             if response.tool_calls:
                 calls = _unique_calls(response.tool_calls)
                 self._history.append(Message("assistant", response.content, calls))
@@ -781,7 +817,7 @@ class Agent:
         arguments = {k: v for k, v in call.arguments.items() if k not in CODE_ONLY_ARGS}
         sent = {**arguments, USER_NAMED_FLAG: verdict.allowed} if decided_by_tool else arguments
         try:
-            output = await self._backend.call(name, sent)
+            output = await self._call(name, sent)
             pending = _needs_confirmation(output)
             if pending is not None:
                 external = str(pending.get(EXTERNAL_LINK, ""))
@@ -791,7 +827,7 @@ class Agent:
                 ):
                     return Step(name, arguments, "DENEGADO: el usuario no ha confirmado esta acción", False)
                 self._intent.remember_destination(external)
-                output = await self._backend.call(name, {**sent, HUMAN_FLAG: True})
+                output = await self._call(name, {**sent, HUMAN_FLAG: True})
         except Exception as exc:  # noqa: BLE001
             return Step(name, arguments, f"ERROR: {type(exc).__name__}: {exc}", False)
         self._intent.observe(name, arguments, output)
