@@ -151,6 +151,20 @@ def ganador_por_uso(resultados: Sequence[Resultado], uso: dict[str, float]) -> b
     return clear_by_use(a.entry.id, b.entry.id, uso)
 
 
+def nombra(query: str, entry: AppEntry) -> bool:
+    """¿La consulta nombra ESA app? Cada palabra con significado de la consulta encaja con una palabra del nombre o de
+    un alias (el ejecutable), o el nombre entero está en la consulta. "bloc de notas" no nombra al "Explorador de
+    archivos" aunque compartan "de"."""
+    palabras = [w for w in normalize(query).split() if w not in CONECTORES]
+    if not palabras:
+        return False
+    nombre = normalize(entry.name)
+    if nombre and f" {nombre} " in f" {normalize(query)} ":
+        return True
+    nombres = [w for text in (entry.name, *entry.aliases) for w in normalize(text).split() if w not in CONECTORES]
+    return bool(nombres) and all(palabra_encaja(p, nombres) for p in palabras)
+
+
 class AppIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
