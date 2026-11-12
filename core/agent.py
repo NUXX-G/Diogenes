@@ -385,7 +385,22 @@ def _page_dicts(steps: list[Step]) -> list[dict[str, Any]]:
 
 
 def _corpus(steps: list[Step]) -> str:
-    return _flat(" ".join(f"{d.get('pagina', '')} {d.get('titulo', '')}" for d in _page_dicts(steps)))
+    """Todo lo que se ha visto en el navegador este turno: páginas, títulos y el nombre de lo que se pulsó."""
+    seen = (f"{d.get('pagina', '')} {d.get('titulo', '')} {d.get('objetivo', '')}" for d in _page_dicts(steps))
+    return _flat(" ".join(seen))
+
+
+def _same_place(a: str, b: str) -> bool:
+    pa, pb = urlsplit(a), urlsplit(b)
+    return bool(pa.netloc) and (pa.netloc, pa.path.rstrip("/"), pa.query) == (pb.netloc, pb.path.rstrip("/"), pb.query)
+
+
+def _arrived_at_link(steps: list[Step]) -> bool:
+    """El último clic llevó justo al enlace pulsado (la URL nueva es su href): lo que se pulsó está abierto."""
+    last = next((d for s in reversed(steps) if s.tool == "browser.click" and (d := _json_dict(s.result))), None)
+    return bool(
+        last and last.get("url_cambio") is True and last.get("enlace") and _same_place(last["url"], last["enlace"])
+    )
 
 
 def _unverbatim_citations(answer: str, steps: list[Step]) -> list[str]:
@@ -433,7 +448,7 @@ def _opened_nothing(answer: str, steps: list[Step]) -> str | None:
 def _opened_elsewhere(answer: str, steps: list[Step]) -> str | None:
     """Dice haber abierto un elemento que cita (y que sí salió en una página), pero la página en la que acabó no es la suya.
     Devuelve la corrección, que se antepone a la respuesta."""
-    if not OPENED.search(answer):
+    if not OPENED.search(answer) or _arrived_at_link(steps):
         return None
     corpus = _corpus(steps)
     named = [c for c in _citations(answer) if _flat(c).rstrip(" .…") in corpus and len(c) >= 12]
@@ -544,7 +559,14 @@ def _unchecked_close(answer: str, steps: list[Step]) -> str | None:
     return None if closed else "No he cerrado nada: en este turno ninguna app se ha llegado a cerrar."
 
 
-def _grounded(answer: str, steps: list[Step]) -> str:
+def _asked_criteria(request: str | None) -> set[str]:
+    """Qué superlativos pidió el usuario ("el más visto", "el más barato"). None: no se sabe, cuentan todos."""
+    if request is None:
+        return set(CRITERIA_CLAIMS)
+    return {k for k, (_, pattern) in CRITERIA_CLAIMS.items() if pattern.search(request)}
+
+
+def _grounded(answer: str, steps: list[Step], request: str | None = None) -> str:
     """El resumen final no puede afirmar lo que la última comprobación no confirma: ni un envío o "hecho", ni un
     superlativo ("el más barato") sin una ordenación de la web que lo garantice, ni que algo "no existe" sin haberlo
     buscado. Los nombres citados, tal cual."""
@@ -568,7 +590,18 @@ def _grounded(answer: str, steps: list[Step]) -> str:
         answer
     ):
         backed = _backed_criteria(steps)
-        unbacked = [k for k, (_, pattern) in CRITERIA_CLAIMS.items() if pattern.search(answer) and k not in backed]
+        asked = _asked_criteria(request)
+        corpus = _corpus(steps)
+
+        def claims(key: str, pattern: re.Pattern[str]) -> bool:
+            """Lo pidió el usuario y la respuesta lo dice; o no lo pidió y la respuesta lo afirma por su cuenta (no
+            repitiendo una etiqueta de la página, como el chip «Más recientes» al describir la pestaña Vídeos)."""
+            found = [m.group(0) for m in pattern.finditer(answer)]
+            if not found or key in backed:
+                return False
+            return key in asked or any(_flat(f) not in corpus for f in found)
+
+        unbacked = [k for k, (_, pattern) in CRITERIA_CLAIMS.items() if claims(k, pattern)]
         if unbacked:
             return prefix + _unbacked_answer(unbacked, steps)
     missing = _unverbatim_citations(answer, steps)
@@ -856,7 +889,7 @@ class Agent:
                 self._history.append(Message("assistant", "", calls))
             else:
                 said = response.content.strip()
-                answer = _grounded(said, result.steps)
+                answer = _grounded(said, result.steps, original)
                 self._model_corrected = answer != said
                 result.answer = _without_tool_names(answer, tool_names)
                 self._history.append(Message("assistant", result.answer))
@@ -904,7 +937,7 @@ class Agent:
 
     def _finish(self, result: AgentResult, answer: str, to_mcp: dict[str, str], *, template: bool = True) -> None:
         tool_names = set(to_mcp) | set(to_mcp.values())
-        result.answer = _without_tool_names(_grounded(answer, result.steps), tool_names)
+        result.answer = _without_tool_names(_grounded(answer, result.steps, self._last_user), tool_names)
         self._turn.answer_by_template = template
         self._history.append(Message("assistant", result.answer))
 

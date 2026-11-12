@@ -220,6 +220,7 @@ class BrowserService:
             + ("" if seen["cambio_visible"] or moved else ". La página NO ha cambiado."),
             "url_cambio": moved,
             "objetivo": node.name,
+            "enlace": urljoin(before, node.href) if node.href else "",
             "criterio": self._rules.order_criteria_of(node.role, node.name),
             **seen,
         }

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
@@ -90,7 +91,7 @@ class PlaywrightPage:
             if "intercepts pointer events" in str(exc):
                 raise ClickIntercepted(ref) from exc
             raise
-        await self._settle()
+        await self._settle(loaded=True)
 
     async def fill(self, ref: str, text: str, enter: bool) -> None:
         page = await self._live()
@@ -129,11 +130,22 @@ class PlaywrightPage:
         page = await self._live()
         await page.go_back(wait_until="domcontentloaded", timeout=10_000)
 
-    async def _settle(self) -> None:
+    async def _settle(self, *, loaded: bool = False) -> None:
+        """Espera a que la página esté lista para leerla. Tras un clic, además, a que cargue y a que el título deje de
+        ser el genérico del sitio («YouTube»): si no, se comprobaría el nombre del vídeo contra una página a medias."""
         page = await self._live()
         with contextlib.suppress(Exception):
-            await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            await page.wait_for_load_state("load" if loaded else "domcontentloaded", timeout=5_000)
         await asyncio.sleep(0.4)
+        if not loaded:
+            return
+        host = (urlsplit(page.url).hostname or "").removeprefix("www.").split(".")[0]
+        for _ in range(12):  # como mucho ~3 s más
+            with contextlib.suppress(Exception):
+                title = (await page.title()).strip().lower()
+                if title and title != host:
+                    return
+            await asyncio.sleep(0.25)
 
 
 def driver_problem() -> str | None:
