@@ -104,6 +104,8 @@ Cuándo se crea una automática: el turno lo resolvió el planificador, todos lo
 
 En las automáticas, las palabras que no son verbo, hueco, conector ni algo que use algún paso quedan **opcionales** en el disparador (`<busc*> {consulta} en {sitio} [en modo incognito]`), y no se crean duplicados: al guardar y al abrir la base se fusionan las recetas con los mismos pasos que solo difieren en palabras de más.
 
+Los mensajes cuyo objetivo es solo un pronombre («ciérralo», «ábrelo otra vez») no crean recetas, y al arrancar se borran las que haya sin huecos aprendidas así. Antes de dar por fallido un paso del navegador se vuelve a mirar la página unos segundos (`PAGE_WAIT_SECONDS`); si no hay ni un elemento de ese tipo (no cargó), el fallo no cuenta.
+
 **Si una receta falla** a mitad, el CLI lo dice al momento (`⏱ receta n.º 4 → falló en paso 2/5: no encontré link «ir al canal Lofi Girl»; sigo con el planificador desde la página actual`), suma un fallo y el planificador sigue **desde la página actual** con los pasos que faltaban como pista en el mensaje del usuario.
 
 **Uso** (todo local, tabla `usage`): cada app abierta, receta acertada y alias usado suma uso, que se reduce a la mitad cada 14 días (`vida_media_dias` en `recetas.json`). `apps.search`/`apps.open` lo usan para ordenar dentro de lo que el índice ya considera igual y para desempatar (≥3 usos y el doble que la segunda), sin saltarse la cobertura. Una receta con 5 aciertos seguidos y ningún fallo se **asciende a atajo** (`⚡ atajo` en `/recetas`); un fallo la devuelve a receta normal; sus pasos se siguen verificando y confirmando igual. La candidata del último turno se guarda también al salir, al cerrar el CLI o con `/nuevo`.
