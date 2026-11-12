@@ -113,7 +113,9 @@ def _turn(messages: list[Message]) -> list[Message]:
 
 
 def _last_tool(messages: list[Message]) -> str:
-    return next((m.content for m in reversed(_turn(messages)) if m.role == "tool"), "")
+    """El último resultado de este turno; si aún no hay, la última página vista (como hace un modelo al seguir)."""
+    here = next((m.content for m in reversed(_turn(messages)) if m.role == "tool"), "")
+    return here or next((m.content for m in reversed(messages) if m.role == "tool" and "\n[e" in m.content), "")
 
 
 def ref_of(page: str, predicate: Callable[[str], bool]) -> str:
