@@ -43,6 +43,8 @@ class TurnMetrics:
     tools: list[ToolTiming] = field(default_factory=list)
     seconds: float = 0.0
     answer_by_template: bool = False  # la respuesta final la redactó el código, no el modelo
+    recipe: int | None = None  # receta usada (o intentada) en el turno
+    recipe_note: str = ""  # en qué paso falló y por qué, si falló
 
     @property
     def model_seconds(self) -> float:
@@ -69,7 +71,11 @@ class Stopwatch:
 
 def describe(m: TurnMetrics) -> str:
     """Una línea para el CLI: `⏱ planificador · modelo 2× 14.1 s (3700→41 tok; prompt 5.3 s, generar 8.6 s) · ...`."""
-    parts = [f"⏱ {m.route}"]
+    route = f"{m.route} (receta n.º {m.recipe})" if m.recipe is not None and m.route != "receta" else m.route
+    route = f"receta n.º {m.recipe}" if m.route == "receta" and m.recipe is not None else route
+    parts = [f"⏱ {route}"]
+    if m.recipe_note:
+        parts.append(m.recipe_note)
     if m.model_calls:
         tin = sum(c.input_tokens for c in m.model_calls)
         tout = sum(c.output_tokens for c in m.model_calls)

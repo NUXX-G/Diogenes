@@ -57,7 +57,7 @@ async def test_ensenado_con_un_canal_funciona_con_otro_sin_el_planificador() -> 
 
     assert resultado.metrics.route == "receta" and len(llm.seen) == llamadas_al_ensenar  # sin el modelo
     assert pc.site.url.startswith("https://www.youtube.com/watch")
-    assert "lofigirl: récord absoluto" in pc.site.title  # el más visto de ESE canal (98000 visualizaciones)
+    assert "lofigirl: récord absoluto" in pc.site.title.lower()  # el más visto de ESE canal (98000 visualizaciones)
     assert [s.tool for s in resultado.steps] == [
         "web.site_search",
         "browser.snapshot",
@@ -66,11 +66,14 @@ async def test_ensenado_con_un_canal_funciona_con_otro_sin_el_planificador() -> 
         "browser.click",
         "browser.click",
     ]
-    assert resultado.answer.startswith("Hecho como me enseñaste") and "lofigirl: récord absoluto" in resultado.answer
+    assert (
+        resultado.answer.startswith("Hecho como me enseñaste")
+        and "lofigirl: récord absoluto" in resultado.answer.lower()
+    )
     receta = store.all()[0]
     assert receta.origin == "enseñada" and receta.steps[0].args == {"sitio": "YouTube", "consulta": "{canal}"}
     assert [s.target.describe() for s in receta.steps[1:]] == [  # type: ignore[union-attr]
-        'link "{canal}"',
+        'link "ir al canal {canal}"',  # en los resultados de Hrom el enlace dice «Ir al canal Hrom»
         'tab "videos"',
         'button "populares"',
         "link n.º 1 (/watch)",
@@ -136,3 +139,40 @@ async def test_fin_avisa_de_los_pasos_guiados_que_no_salieron_bien() -> None:
         await agent.run("pulsa el botón raro")
         fin = agent.command("/fin")
     assert fin is not None and fin.endswith("Aviso: «pulsa el botón raro» no salió bien y no se ha grabado.")
+
+
+async def test_si_la_receta_falla_dice_en_que_paso_y_el_planificador_sigue_desde_ahi() -> None:
+    pc, store = FakePC(), RecipeStore(":memory:")
+    pc.site.layouts["nadie"] = "sin"  # su canal no sale en los resultados
+    notas: list[str] = []
+    llm = FakeLLM(*guion_hrom(), decir("No encuentro ese canal en los resultados."))
+    async with Client(pc.server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append)
+        await ensenar(agent)
+        resultado = await agent.run("dame el vídeo más visto del canal Nadie")
+    nota = "receta n.º 1 → falló en paso 2/5: no encontré link «ir al canal Nadie»; sigo con el planificador"
+    assert notas and nota in notas[0] and nota in resultado.metrics.recipe_note
+    assert resultado.metrics.route == "planificador" and resultado.metrics.recipe == 1
+    # el planificador ve lo ya hecho (búsqueda y página) y la pista con lo que faltaba, sin empezar de cero
+    visto = llm.seen[-1]
+    pista = next(m.content for m in reversed(visto) if m.role == "user")
+    assert "Sigue DESDE LA PÁGINA ACTUAL" in pista
+    assert "pulsa link «ir al canal Nadie»; pulsa tab «videos»; pulsa button «populares»; pulsa link n.º 1" in pista
+    assert any(m.role == "tool" and "Nadie - mejores momentos" in m.content for m in visto)
+    assert store.all()[0].failures == 1
+
+
+async def test_el_enlace_al_canal_se_encuentra_aunque_se_escriba_distinto() -> None:
+    from core.recipes import Target, resolve_target
+
+    canal = Target("link", "ir al canal {canal}", "/@")
+    pagina = (
+        '[e1] link "Lofi Girl - lo mejor" -> /watch?v=1\n'
+        '[e2] link "@LofiGirl · 1,5 M de suscriptores" -> /@LofiGirl\n'
+        '[e3] link "Otro canal" -> /@otro'
+    )
+    assert resolve_target(canal, pagina, {"canal": "Lofi Girl"}) == "e2"  # por el perfil @LofiGirl
+    titulo = '[e1] link "Lofi Girl - lo mejor" -> /watch?v=1\n[e2] link "Lofi Girl" -> /@lofi'
+    assert resolve_target(canal, titulo, {"canal": "lofi girl"}) == "e2"  # el nombre contiene el valor
+    chip = '[e1] button "Populares"'
+    assert resolve_target(Target("tab", "populares"), chip, {}) == "e1"  # mismo chip, otro rol

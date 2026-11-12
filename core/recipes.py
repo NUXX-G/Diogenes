@@ -228,19 +228,67 @@ def target_from(page: str, ref: str, slots: dict[str, str], ordinal_hint: int | 
     return Target(item.role, name, form)
 
 
+def handle_of(href: str) -> str:
+    """El identificador de un perfil en su enlace: `/@LofiGirl/videos` → `lofigirl`; '' si no es un perfil."""
+    path = urlsplit(href).path if href else ""
+    return normalize(path[2:].split("/")[0]).replace(" ", "") if path.startswith("/@") else ""
+
+
+# Roles que, para la web, son lo mismo a efectos de pulsar: un chip puede ser botón en una visita y pestaña en otra.
+_CLICKABLE = frozenset({"link", "button", "tab", "menuitem", "option", "radio"})
+
+
+def _has(name: str, value: str) -> bool:
+    return bool(value) and f" {value} " in f" {name} "
+
+
 def resolve_target(target: Target, page: str, values: dict[str, str]) -> str | None:
-    """El ref del elemento en la página actual, o None si no está."""
-    items = [
-        i for i in parse_page(page) if i.role == target.role and (not target.shape or shape(i.href) == target.shape)
-    ]
+    """El ref del elemento en la página actual, o None si no está.
+
+    Con un hueco no se exige el texto grabado («Ir al canal Hrom»): basta un elemento del mismo rol y forma de enlace
+    cuyo nombre CONTENGA el valor (sin tildes ni mayúsculas) o cuyo perfil `/@...` sea ese valor sin espacios; entre
+    varios, el de nombre más corto (el enlace del canal antes que un vídeo que lo nombra)."""
+    items = parse_page(page)
+
+    def same_shape(i: PageItem) -> bool:
+        return not target.shape or shape(i.href) == target.shape
+
+    strict = [i for i in items if i.role == target.role and same_shape(i)]
     if target.ordinal:
-        return items[target.ordinal - 1].ref if len(items) >= target.ordinal else None
-    wanted = fill_text(target.name, {k: normalize(v) for k, v in values.items()})
-    names = [(i, normalize(i.name.rstrip("…"))) for i in items]
-    exact = next((i.ref for i, n in names if n == wanted), None)
-    if exact is not None or not SLOT.search(target.name):
-        return exact
-    return next((i.ref for i, n in names if f" {wanted} " in f" {n} "), None)
+        return strict[target.ordinal - 1].ref if len(strict) >= target.ordinal else None
+    norm_values = {k: normalize(v) for k, v in values.items()}
+    wanted = fill_text(target.name, norm_values)
+    loose = [i for i in items if i.role in _CLICKABLE and same_shape(i)] if target.role in _CLICKABLE else strict
+
+    def name(i: PageItem) -> str:
+        return normalize(i.name.rstrip("…"))
+
+    for pool in (strict, loose):
+        exact = [i for i in pool if name(i) == wanted]
+        if exact:
+            return exact[0].ref
+    for pool in (strict, loose):
+        found = sorted((i for i in pool if _has(name(i), wanted)), key=lambda i: len(i.name))
+        if found:
+            return found[0].ref
+    slots = [norm_values[s] for s in SLOT.findall(target.name) if norm_values.get(s)]
+    for value in slots:
+        for pool in (strict, loose):
+            found = sorted((i for i in pool if _has(name(i), value)), key=lambda i: len(i.name))
+            if found:
+                return found[0].ref
+        compact = value.replace(" ", "")
+        profile = [i for i in loose if handle_of(i.href) == compact]
+        if profile:
+            return min(profile, key=lambda i: len(i.name)).ref
+    return None
+
+
+def describe_target(target: Target, values: dict[str, str]) -> str:
+    """Cómo se le dice al usuario qué elemento se buscaba: link «ir al canal Lofi Girl», link n.º 1 (/watch)."""
+    if target.ordinal:
+        return target.describe()
+    return f"{target.role} «{fill_text(target.name, values)}»"
 
 
 # --- recetas -------------------------------------------------------------------------------------------------------

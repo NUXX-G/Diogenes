@@ -90,6 +90,7 @@ async def amain() -> int:
             on_step=lambda s: print(format_step(s)),
             toolset=ToolSelector.load(os.environ.get("DIOGENES_HERRAMIENTAS", "todas")),
             recipes=recipes,
+            on_note=print,
         )
         loop = asyncio.get_running_loop()
         combo = load_combo()

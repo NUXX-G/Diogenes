@@ -23,11 +23,13 @@ from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
 from core.recipes import (
     Recipe,
     RecipeConfig,
+    RecipeStep,
     RecipeStore,
     Recorded,
     alias_key,
     build_recipe,
     checks_for,
+    describe_target,
     fill_args,
     passes,
     resolve_target,
@@ -602,6 +604,23 @@ def _options_question(subject: str, options: list[dict[str, Any]]) -> str:
     return f"Hay varias opciones para «{subject}»:\n{lines}\n¿Cuál quieres?"
 
 
+@dataclass(frozen=True)
+class _ReplayFailure:
+    recipe: Recipe
+    values: dict[str, str]
+    n: int  # paso (desde 1) en el que se paró
+    turn_start: int  # dónde empieza el turno en el historial (para añadir la pista al mensaje del usuario)
+
+
+def _step_hint(step: RecipeStep, values: dict[str, str]) -> str:
+    """Un paso de la receta dicho en castellano, para el planificador."""
+    if step.target is not None:
+        verb = "escribe en" if step.tool == "browser.type" else "pulsa"
+        return f"{verb} {describe_target(step.target, values)}"
+    args = ", ".join(f"{k}={v!r}" for k, v in fill_args(step.args, values).items())
+    return f"{_label(step.tool)} ({args})"
+
+
 # Herramientas cuyo éxito ya demuestra que se hizo (no devuelven lanzada/cerrada/verificado ni cambio de página).
 UNCHECKED_DONE = frozenset({"web.site_search", "web.open", "uri.open", "media.key"})
 ALIASED_TOOLS = frozenset({"apps.open", "apps.close"})
@@ -639,8 +658,10 @@ class Agent:
         on_step: Callable[[Step], None] | None = None,
         recipes: RecipeStore | None = None,
         recipe_config: RecipeConfig | None = None,
+        on_note: Callable[[str], None] | None = None,
     ) -> None:
         self._llm = llm
+        self._on_note = on_note  # avisos en el momento (p. ej. "la receta n.º 4 falló en el paso 2")
         self._backend = backend
         self._policy = policy or ConfirmationPolicy.load()
         self._intent = intent or IntentGate.load()
@@ -753,7 +774,7 @@ class Agent:
             if self._choice is not None:
                 done = await self._apply_choice(to_mcp, result, original)
             elif hit is not None:
-                done = await self._replay(hit[0], hit[1], to_mcp, result, original)
+                done = await self._replay(hit[0], hit[1], to_mcp, result, original, turn_start)
             if not done:
                 await self._loop(shown, to_mcp, result, started, original, target)
                 self._learn(request, text, result)
@@ -958,18 +979,27 @@ class Agent:
         return "\n" + " ".join(granted) if granted else ""
 
     async def _replay(
-        self, recipe: Recipe, values: dict[str, str], to_mcp: dict[str, str], result: AgentResult, original: str
+        self,
+        recipe: Recipe,
+        values: dict[str, str],
+        to_mcp: dict[str, str],
+        result: AgentResult,
+        original: str,
+        turn_start: int = -1,
     ) -> bool:
         """Repite la receta paso a paso con las mismas comprobaciones. Si un paso no sale como la primera vez, para,
-        suma un fallo y deja seguir al planificador con lo ya hecho en el historial. Devuelve True si el turno acabó."""
+        suma un fallo, avisa de en qué paso y por qué, y deja seguir al planificador DESDE donde se quedó, con los pasos
+        que faltaban como pista. Devuelve True si el turno acabó."""
         assert recipe.id is not None
         to_wire = {mcp: wire for wire, mcp in to_mcp.items()}
         self._turn.route = "receta"
+        self._turn.recipe = recipe.id
         page: str | None = None
         history_before, steps_before = len(self._history), len(result.steps)
-        for rstep in recipe.steps:
+        for n, rstep in enumerate(recipe.steps, start=1):
+            fail = _ReplayFailure(recipe, values, n, turn_start)
             if rstep.tool not in to_wire:
-                return self._replay_failed(recipe)
+                return self._replay_failed(fail, f"la herramienta {_label(rstep.tool)} no está disponible")
             args = fill_args(rstep.args, values)
             if rstep.target is not None:
                 if page is None and "browser.snapshot" in to_wire:
@@ -977,7 +1007,7 @@ class Agent:
                     page = str((_json_dict(seen.result) or {}).get("pagina") or "")
                 ref = resolve_target(rstep.target, page or "", values)
                 if ref is None:
-                    return self._replay_failed(recipe)
+                    return self._replay_failed(fail, f"no encontré {describe_target(rstep.target, values)}")
                 args = {"ref": ref, **args}
             step = await self._run_step(ToolCall(to_wire[rstep.tool], args), to_mcp, result, original)
             if step.result.startswith("DENEGADO"):
@@ -994,10 +1024,11 @@ class Agent:
                 del self._history[history_before:]
                 del result.steps[steps_before:]
                 self._pending = None
-                self._turn.route = "planificador"
+                self._turn.route, self._turn.recipe = "planificador", None
                 return False
             if not passes(rstep, step.result):
-                return self._replay_failed(recipe)
+                why = str(data.get("mensaje") or "no salió como la primera vez")[:120]
+                return self._replay_failed(fail, f"{_label(rstep.tool)}: {why}")
             page = data["pagina"] if isinstance(data.get("pagina"), str) else None
         self._recipes.success(recipe.id)  # type: ignore[union-attr]
         self._last_recipe = recipe.id
@@ -1009,10 +1040,28 @@ class Agent:
         self._finish(result, answer, to_mcp)
         return True
 
-    def _replay_failed(self, recipe: Recipe) -> bool:
+    def _replay_failed(self, fail: _ReplayFailure, reason: str) -> bool:
+        """Suma el fallo, lo dice (CLI y métricas) y deja al planificador una pista: lo que faltaba de la receta."""
+        recipe = fail.recipe
         assert self._recipes is not None and recipe.id is not None
-        self._recipes.failure(recipe.id, self._recipe_config.max_streak)
-        self._turn.route = "planificador"  # sigue el modelo con lo ya hecho a la vista
+        disabled = self._recipes.failure(recipe.id, self._recipe_config.max_streak)
+        total = len(recipe.steps)
+        note = f"receta n.º {recipe.id} → falló en paso {fail.n}/{total}: {reason}; sigo con el planificador desde la página actual"
+        if disabled:
+            note += " (desactivada: demasiados fallos seguidos)"
+        self._turn.recipe_note = note
+        self._turn.route = "planificador"
+        if self._on_note:
+            self._on_note(f"  ⏱ {note}")
+        remaining = [_step_hint(s, fail.values) for s in recipe.steps[fail.n - 1 :]]
+        hint = (
+            f"\n[Diogenes intentó lo que le enseñaste para «{recipe.example}» y se paró en el paso {fail.n} ({reason}). "
+            "Lo anterior ya está hecho: mira sus resultados. Sigue DESDE LA PÁGINA ACTUAL, sin volver a empezar ni a "
+            f"buscar, con lo que faltaba: {'; '.join(remaining)}.]"
+        )
+        if 0 <= fail.turn_start < len(self._history) and self._history[fail.turn_start].role == "user":
+            first = self._history[fail.turn_start]
+            self._history[fail.turn_start] = Message("user", first.content + hint)
         return False
 
     def _learn(self, request: str, text: str, result: AgentResult) -> None:

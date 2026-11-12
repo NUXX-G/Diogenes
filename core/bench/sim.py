@@ -182,7 +182,7 @@ def plan_most_viewed(channel: str) -> Callable[[set[str]], list[Step]]:
     return lambda _t: [
         ("call", ("web_site_search", {"sitio": "YouTube", "consulta": channel})),
         ("call", ("browser_snapshot", {})),
-        ("call", ("browser_click", click(lambda line: f'link "{channel}"' in line and "/@" in line))),
+        ("call", ("browser_click", click(lambda line: "link" in line and "/@" in line))),
         ("call", ("browser_click", click(lambda line: 'tab "Vídeos"' in line))),
         ("call", ("browser_click", click(lambda line: 'button "Populares"' in line))),
         ("call", ("browser_click", click(lambda line: "/watch" in line))),
@@ -202,7 +202,7 @@ TEACH_STEPS: tuple[tuple[str, list[Step]], ...] = (
         [
             ("call", ("web_site_search", {"sitio": "YouTube", "consulta": "Hrom"})),
             ("call", ("browser_snapshot", {})),
-            _click(lambda line: 'link "Hrom"' in line and "/@" in line),
+            _click(lambda line: "Hrom" in line and "/@" in line),
             ("say", "Estoy en el canal."),
         ],
     ),
@@ -224,6 +224,8 @@ ORDERS = (
     Order("búscame en YouTube cómo hacer mochis", plan_site_search("YouTube", "cómo hacer mochis")),
     Order("pausa el vídeo de YouTube", plan_pause()),
     Order("dame el vídeo más visto del canal Hrom", plan_most_viewed("Hrom")),
+    # Otro canal (dos palabras) cuyo enlace en los resultados no se escribe como el del canal enseñado
+    Order("dame el vídeo más visto del canal Lofi Girl", plan_most_viewed("Lofi Girl")),
 )
 
 

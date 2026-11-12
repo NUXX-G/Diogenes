@@ -128,9 +128,10 @@ async def test_el_banco_mide_las_cinco_ordenes_sin_tocar_el_pc() -> None:
         "búscame en YouTube cómo hacer mochis",
         "pausa el vídeo de YouTube",
         "dame el vídeo más visto del canal Hrom",
+        "dame el vídeo más visto del canal Lofi Girl",
     ]
     assert all(f["llamadas_modelo"] >= 1 and f["segundos_total"] > 0 for f in filas)
-    hrom = filas[-1]
+    hrom = filas[4]
     assert hrom["herramientas"][-1] == "browser.click" and "Corrección" not in hrom["respuesta"]
     assert "**Total**" in table(filas)
 

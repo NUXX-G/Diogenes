@@ -111,6 +111,9 @@ class VideoSite:
     title: str = ""
     sorted_by_views: bool = False
     visits: list[str] = field(default_factory=list)
+    # Cómo enlaza cada canal la página de resultados (como YouTube, que no siempre lo escribe igual):
+    # "plano" → «Hrom»; "ir" → «Ir al canal Hrom»; "handle" → «@LofiGirl · 1,5 M de suscriptores».
+    layouts: dict[str, str] = field(default_factory=lambda: {"hrom": "ir", "lofigirl": "handle"})
     _links: dict[str, _Link] = field(default_factory=dict)
 
     @staticmethod
@@ -133,11 +136,17 @@ class VideoSite:
         if path == "/results":
             q = parse_qs(parts.query).get("search_query", [""])[0]
             self.title = f"{q} - YouTube"
-            links += [
-                _Link("link", f"{q} - mejores momentos", "/watch?v=r1"),
-                _Link("link", q, f"/@{self.slug(q)}"),
-                _Link("link", f"Reacción a {q}", "/watch?v=r2"),
-            ]
+            layout = self.layouts.get(self.slug(q), "plano")
+            handle = "".join(w.capitalize() for w in normalize(q).split())
+            channel: _Link | None = {
+                "plano": _Link("link", q, f"/@{self.slug(q)}"),
+                "ir": _Link("link", f"Ir al canal {q}", f"/@{self.slug(q)}"),
+                "handle": _Link("link", f"@{handle} · 1,5 M de suscriptores", f"/@{handle}"),
+                "sin": None,  # el canal no sale en los resultados
+            }[layout]
+            links += [_Link("link", f"{q} - mejores momentos", "/watch?v=r1")]
+            links += [channel] if channel else []
+            links += [_Link("link", f"Reacción a {q}", "/watch?v=r2")]
         elif path.startswith("/@"):
             slug = self._channel_of(path)
             self.title = f"{slug} - YouTube"
