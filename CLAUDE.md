@@ -126,7 +126,7 @@ Los mensajes cuyo objetivo es solo un pronombre («ciérralo», «ábrelo otra v
 ## Entrada y salida
 
 - **Voz**: `openWakeWord` siempre escuchando. Hasta que tengamos un modelo propio de «Diógenes» (se entrena gratis con el notebook de openWakeWord y datos sintéticos), se usa **push-to-talk** (`Ctrl+Alt+Espacio`). STT con `faster-whisper` (`base` o `small`, español) y VAD para cortar al acabar de hablar. TTS con **Piper**, voz en español.
-- **Texto**: panel overlay siempre disponible (`Ctrl+Alt+D`) y Telegram (el mismo bot del proyecto de clase, restringido a nuestros chat IDs).
+- **Texto**: panel overlay siempre disponible (`Ctrl+Alt+D`) y Telegram con un **bot propio del modo personal**, distinto del de clase (Telegram solo admite un long polling por token: compartirlo podría tumbar la demo), restringido a nuestros chat IDs. Por Telegram nunca salen capturas ni páginas, solo frases cortas y botones de confirmación.
 - **Estado visible**: un indicador muestra en qué está Diogenes (escuchando, pensando, la acción actual, esperando confirmación, error, hecho). Ver la sección Personaje.
 
 ## Seguridad mínima (aunque sea de uso personal)
