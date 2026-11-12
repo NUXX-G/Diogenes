@@ -216,7 +216,7 @@ async def test_si_no_hay_una_app_con_ese_nombre_no_es_un_fallo_de_la_receta() ->
     async with Client(FakePC().server()) as client:
         resultado = await agente(llm, client, store).run("abre youtube")
     assert store.all()[0].failures == 0
-    assert [s.tool for s in resultado.steps] == ["apps.open", "web.open"]
+    assert [s.tool for s in resultado.steps] == ["web.open"]  # el intento de la receta no queda
 
 
 async def test_un_turno_que_pidio_confirmacion_no_se_aprende() -> None:
@@ -302,3 +302,32 @@ async def test_sin_almacen_no_se_aprende_nada(frase: str) -> None:
         agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load())
         await agent.run(frase)
         assert agent.command("/recetas") == "No hay base de recetas."
+
+
+async def test_si_la_receta_no_aplica_el_planificador_empieza_limpio_y_sin_eleccion_pendiente() -> None:
+    store = RecipeStore(":memory:")
+    store.save(receta("abre Spotify", Recorded("apps.open", {"nombre": "Spotify"}, LANZADA)))
+    llm = FakeLLM(llamar("apps_search", nombre="cosas raras"), decir("No existe."), decir("¿El primero de qué?"))
+    async with Client(FakePC().server()) as client:
+        agent = agente(llm, client, store)
+        await agent.run("abre el editor de cosas raras")  # «editor» tiene varias opciones: la receta no aplica
+        assert all(m.role != "tool" for m in llm.seen[0])  # el modelo no ve el intento de la receta
+        siguiente = await agent.run("el primero")  # no hay lista pendiente: va al modelo como texto
+    assert siguiente.metrics.route == "planificador"
+
+
+async def test_los_turnos_con_pasos_del_navegador_no_se_aprenden_solos() -> None:
+    store = RecipeStore(":memory:")
+    pc = FakePC()
+    llm = FakeLLM(
+        llamar("web_site_search", sitio="YouTube", consulta="Hrom"),
+        llamar("browser_snapshot"),
+        llamar("browser_click", ref="e3"),
+        decir("Estoy en el canal de Hrom."),
+        decir("De nada."),
+    )
+    async with Client(pc.server()) as client:
+        agent = agente(llm, client, store)
+        await agent.run("abre el canal Hrom en youtube")
+        await agent.run("gracias")
+    assert store.all() == []

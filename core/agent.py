@@ -965,6 +965,7 @@ class Agent:
         to_wire = {mcp: wire for wire, mcp in to_mcp.items()}
         self._turn.route = "receta"
         page: str | None = None
+        history_before, steps_before = len(self._history), len(result.steps)
         for rstep in recipe.steps:
             if rstep.tool not in to_wire:
                 return self._replay_failed(recipe)
@@ -986,7 +987,13 @@ class Agent:
                 return True
             data = _json_dict(step.result) or {}
             if rstep.tool == "apps.open" and data.get("ok") is True and data.get("lanzada") is not True:
-                self._turn.route = "planificador"  # no hay una app con ese nombre: no es culpa de la receta
+                # No hay una app que se llame así ("abre el canal Hrom en youtube"): la receta no aplica y no es culpa
+                # suya. Se borra el intento para que el planificador empiece limpio, sin una lista de apps que no viene
+                # a cuento ni una elección pendiente.
+                del self._history[history_before:]
+                del result.steps[steps_before:]
+                self._pending = None
+                self._turn.route = "planificador"
                 return False
             if not passes(rstep, step.result):
                 return self._replay_failed(recipe)
@@ -1022,7 +1029,9 @@ class Agent:
         if any(not s.ok or s.asked for s in steps):
             return  # algo falló, o hubo que preguntar: nada que el usuario haya pedido entero
         actions = [s for s in steps if s.tool not in self._recipe_config.read_only]
-        if not actions:
+        if not actions or any(s.tool.startswith("browser.") for s in actions):
+            # Dentro de una web el modelo decide qué pulsar viendo la página, y la página puede haberlo sugerido: las
+            # secuencias del navegador solo se aprenden con /aprender, donde el usuario guía cada paso.
             return
         last = actions[-1]
         if not (checks_for(last.tool, last.result) or last.tool in UNCHECKED_DONE):
