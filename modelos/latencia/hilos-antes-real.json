@@ -1,0 +1,115 @@
+[
+  {
+    "pasada": 1,
+    "orden": "abre Spotify",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 3993,
+    "tokens_salida": 21,
+    "segundos_modelo": 10.24,
+    "segundos_resto": 0.065,
+    "segundos_total": 10.3,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.open"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He abierto Spotify."
+  },
+  {
+    "pasada": 1,
+    "orden": "cierra la calculadora",
+    "ruta": "planificador",
+    "llamadas_modelo": 2,
+    "tokens_entrada": 8285,
+    "tokens_salida": 44,
+    "segundos_modelo": 24.53,
+    "segundos_resto": 0.007,
+    "segundos_total": 24.53,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.abiertas",
+      "apps.close"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He cerrado Calculadora."
+  },
+  {
+    "pasada": 1,
+    "orden": "búscame en YouTube cómo hacer mochis",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4281,
+    "tokens_salida": 33,
+    "segundos_modelo": 16.88,
+    "segundos_resto": 0.005,
+    "segundos_total": 16.88,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He buscado «cómo hacer mochis» en YouTube."
+  },
+  {
+    "pasada": 1,
+    "orden": "pausa el vídeo de YouTube",
+    "ruta": "planificador",
+    "llamadas_modelo": 2,
+    "tokens_entrada": 10020,
+    "tokens_salida": 44,
+    "segundos_modelo": 53.19,
+    "segundos_resto": 0.004,
+    "segundos_total": 53.19,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "media.sessions",
+      "media.control"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho y comprobado: Chrome ahora está en pausa."
+  },
+  {
+    "pasada": 1,
+    "orden": "dame el vídeo más visto del canal Hrom",
+    "ruta": "planificador",
+    "llamadas_modelo": 5,
+    "tokens_entrada": 25459,
+    "tokens_salida": 105,
+    "segundos_modelo": 124.73,
+    "segundos_resto": 0.009,
+    "segundos_total": 124.74,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.click",
+      "browser.snapshot",
+      "browser.click"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo \"Siguiente vídeo\" del canal Hrom."
+  },
+  {
+    "pasada": 1,
+    "orden": "dame el vídeo más visto del canal Lofi Girl",
+    "ruta": "planificador",
+    "llamadas_modelo": 4,
+    "tokens_entrada": 21093,
+    "tokens_salida": 86,
+    "segundos_modelo": 94.03,
+    "segundos_resto": 0.006,
+    "segundos_total": 94.04,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.click",
+      "browser.snapshot"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo \"Siguiente vídeo\" del canal Lofi Girl."
+  }
+]

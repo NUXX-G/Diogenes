@@ -144,3 +144,58 @@ frío sube de 127 s a 133 s y «pausa el vídeo» de 15 s a 25 s (se relee lo qu
 En la 1.ª pasada el modelo real miró si la calculadora estaba abierta antes de cerrarla (2 llamadas, 40,6 s) y listó
 las sesiones antes de pausar (2 llamadas, 71,3 s). Al primer intento de esta medición, mirar con `apps.abiertas` se
 daba por respuesta y no cerraba: corregido y medido otra vez (esta tabla es la segunda medición).
+
+## Hilos, ventana de contexto y precarga (2026-11-12)
+
+Rama `perf/hilos-y-contexto`. Mismo PC del aula (i5-8600, 6 núcleos, RAM en doble canal a 2667 MT/s), Ollama 0.40.16
+nativo y `qwen3:4b-instruct` Q4_K_M. Banco real, una pasada, **sin recetas** (todo por el planificador, para ver la
+velocidad del modelo) y con `--calentar`:
+`python -m core.bench --real --calentar --pasadas 1`.
+
+### Hilos: los que elige Ollama frente a `num_thread` 6 (`num_ctx` 8192)
+
+| Orden | Antes (hilos de Ollama) | Después (6 hilos) |
+|---|---|---|
+| abre Spotify | 1 · 10,3 s | 1 · 6,4 s |
+| cierra la calculadora | 2 · 24,5 s | 2 · 15,7 s |
+| búscame en YouTube cómo hacer mochis | 1 · 16,9 s | 1 · 11,3 s |
+| pausa el vídeo de YouTube | 2 · 53,2 s | 2 · 36,4 s |
+| dame el vídeo más visto del canal Hrom | 5 · 124,7 s | 5 · 75,6 s |
+| dame el vídeo más visto del canal Lofi Girl | 4 · 94,0 s | 4 · 58,1 s |
+| **Total** | **15 · 323,7 s** | **15 · 203,5 s (−37 %)** |
+
+Las mismas llamadas, las mismas herramientas y las mismas respuestas: solo cambia la velocidad. Filas en
+`latencia/hilos-antes-real.json` y `latencia/hilos-6-ctx8192-real.json`.
+
+Medido a mano con la API de Ollama, para entender de dónde sale:
+
+| Prueba | Leer el prompt | Generar |
+|---|---|---|
+| Prompt de 4215 tokens, hilos de Ollama | 33,1 tok/s | 2,5 tok/s |
+| Prompt de 4215 tokens, 6 hilos | 52,6 tok/s | 4,2 tok/s |
+| Prompt de sistema solo (2086 tokens), 6 hilos | 66 tok/s | — |
+| Generar con 256 / 1067 / 2117 / 4215 tokens de contexto, 6 hilos | — | 9,0 / 8,7 / 6,8 / 4,2 tok/s |
+
+Los ~3,4 tok/s que se medían antes no eran el límite del PC: eran los hilos de Ollama más un contexto de ~4k tokens.
+**Generar se hunde con el contexto**: recortar el prompt acelera también cada token de salida.
+
+### `num_ctx` 4096: todavía no cabe
+
+Con 4096, Ollama rechaza ya la primera orden: `request (4109 tokens) exceeds the available context size (4096 tokens)`.
+Cada llamada del banco manda entre ~4000 y ~5300 tokens (prompt de sistema 2086 + herramientas ~1650 + historial y
+página), así que se queda en **8192** hasta que el prompt adelgace (prompt de sistema ≤ 700 tokens y herramientas
+≤ 900). La ventana reservada apenas cambia la velocidad (lo que cuenta es el contexto que se usa de verdad); bajarla
+ahorra RAM: ~144 KB por token de caché KV, ~0,6 GB de 8192 a 4096. Si un prompt no cabe, el error ahora dice qué
+variable subir.
+
+### Arranque en frío y precarga (`num_ctx` 8192, modelo descargado con `ollama stop`)
+
+| Configuración | Precarga (en segundo plano) | Primera orden («abre Spotify») |
+|---|---|---|
+| Hilos de Ollama, sin precarga (antes) | — | 134,2 s |
+| 6 hilos, sin precarga | — | 83,9 s |
+| 6 hilos, con precarga | 80,1 s | **6,2 s** |
+
+Al arrancar, el CLI lanza la precarga en segundo plano: carga el modelo y deja en la caché de Ollama el prompt de
+sistema y las herramientas generando un solo token. Si la primera orden llega antes de que acabe, Ollama la atiende
+justo después y ya no relee el prefijo. Se desactiva con `DIOGENES_PRECARGA=0`.

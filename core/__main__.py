@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 
 from core.agent import PANIC_TOOL, Agent, Step
 from core.hotkey import HotkeyListener, load_combo
-from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaProvider
+from core.llm.base import LLMError
+from core.llm.ollama import OllamaProvider
 from core.mcp_client import connect_hands
 from core.metrics import MetricsLog
 from core.recipes import RecipeStore
@@ -45,6 +46,20 @@ async def repl(
     await (session or Session(write)).serve(agent, read)
 
 
+async def _preload(agent: Agent) -> None:
+    """Carga el modelo y el prompt de sistema en segundo plano al arrancar: la primera orden no paga el arranque en frío
+    (~85 s de carga más la lectura del prompt en la CPU del aula). Si llega una orden antes, Ollama la atiende después."""
+    if os.environ.get("DIOGENES_PRECARGA", "1") == "0":
+        return
+    try:
+        seconds = await agent.warm()
+    except Exception as exc:  # noqa: BLE001  (precargar es una optimización: nunca tumba el CLI)
+        print(f"\nAVISO: no he podido precargar el modelo: {exc}")
+        return
+    if seconds is not None:
+        print(f"\n(modelo precargado en {seconds:.0f} s)")
+
+
 async def amain() -> int:
     mode = os.environ.get("DIOGENES_MODE", "clase")
     if mode != "personal":
@@ -55,12 +70,11 @@ async def amain() -> int:
         print("Falta HANDS_MCP_TOKEN en .env (ver .env.example).", file=sys.stderr)
         return 2
     url = f"http://127.0.0.1:{os.environ.get('HANDS_MCP_PORT', '8765')}/mcp"
-    llm = OllamaProvider(
-        os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
-        os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
-        keep_alive=os.environ.get("DIOGENES_OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
-        num_ctx=int(os.environ.get("DIOGENES_OLLAMA_NUM_CTX", DEFAULT_NUM_CTX)),
-    )
+    try:
+        llm = OllamaProvider.from_env()
+    except LLMError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     async def read() -> str:
         return await asyncio.to_thread(input, "> ")
@@ -103,9 +117,11 @@ async def amain() -> int:
             print(f"Botón del pánico: {combo} o /parar (también /para).")
         else:
             print(f"AVISO: no he podido registrar {combo} (¿lo usa otro programa?). Para cancelar, escribe /parar.")
+        preload = asyncio.create_task(_preload(agent))
         try:
             await repl(agent, read, print, session)
         finally:
+            preload.cancel()
             hotkey.stop()
             await llm.aclose()
     return 0
