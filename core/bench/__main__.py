@@ -19,9 +19,10 @@ from typing import Any
 
 from core.agent import Agent
 from core.bench.fakes import APPS, FakePC
-from core.bench.sim import ORDERS, Director, Order
+from core.bench.sim import ORDERS, TEACH_PHRASE, TEACH_STEPS, Director, Order, SimulatedLLM, scripted
 from core.llm.base import LLMProvider
 from core.mcp_client import McpTools
+from core.recipes import RecipeStore
 from core.safety import ConfirmationPolicy
 from core.toolsets import ALL, ToolSelector
 
@@ -42,6 +43,8 @@ async def run(
     passes: int = 2,
     prepare: Any = None,
     toolset: str = ALL,
+    recipes: bool = False,
+    teach: bool = False,
 ) -> list[dict[str, Any]]:
     """Ejecuta las órdenes `passes` veces en una misma sesión y devuelve una fila por orden y pasada."""
     director = Director()
@@ -55,8 +58,16 @@ async def run(
         return True
 
     async with _client(pc) as client:
+        store = RecipeStore(":memory:") if recipes or teach else None
+        if teach and store is not None:
+            await _teach(McpTools(client), store)
         agent = Agent(
-            llm, McpTools(client), policy=ConfirmationPolicy.load(), confirm=yes, toolset=ToolSelector.load(toolset)
+            llm,
+            McpTools(client),
+            policy=ConfirmationPolicy.load(),
+            confirm=yes,
+            toolset=ToolSelector.load(toolset),
+            recipes=store,
         )
         if prepare is not None:
             await prepare(agent, director, pc)
@@ -91,6 +102,18 @@ async def run(
     return rows
 
 
+async def _teach(tools: McpTools, store: RecipeStore) -> None:
+    """Enseña la receta de Hrom con /aprender, como lo haría el usuario, con un modelo simulado aparte: no cuenta en
+    la medición (es un coste de una sola vez)."""
+    current: list[Any] = []
+    teacher = Agent(SimulatedLLM(lambda m, t: scripted(lambda _t: current[0])(m, t)), tools, recipes=store)
+    teacher.command(f"/aprender {TEACH_PHRASE}")
+    for said, steps in TEACH_STEPS:
+        current[:] = [steps]
+        await teacher.run(said)
+    teacher.command("/fin")
+
+
 def _client(pc: FakePC) -> Any:
     from mcp import Client
 
@@ -119,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pasadas", type=int, default=2)
     parser.add_argument("--salida", type=Path, help="guarda las filas en JSON")
     parser.add_argument("--herramientas", default=ALL, choices=("todas", "relevantes"), help="qué herramientas ve")
+    parser.add_argument("--recetas", action="store_true", help="con recetas y alias (base en memoria)")
+    parser.add_argument("--ensenar", action="store_true", help="enseña antes la receta de Hrom con /aprender")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 por defecto
@@ -133,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
             os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
         )
-    rows = asyncio.run(run(real=real, passes=args.pasadas, toolset=args.herramientas))
+    rows = asyncio.run(
+        run(real=real, passes=args.pasadas, toolset=args.herramientas, recipes=args.recetas, teach=args.ensenar)
+    )
     print(table(rows))
     for r in rows:
         print(f"- {r['orden']} (pasada {r['pasada']}): {r['herramientas']} → {r['respuesta'][:120]!r}")

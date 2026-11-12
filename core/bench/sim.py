@@ -188,6 +188,28 @@ def plan_most_viewed(channel: str) -> Callable[[set[str]], list[Step]]:
     ]
 
 
+def _click(predicate: Callable[[str], bool]) -> Step:
+    return ("call", ("browser_click", lambda page: {"ref": ref_of(page, predicate)}))
+
+
+# Lo que el usuario guía con /aprender para «dame el vídeo más visto del canal Hrom», y lo que hace el modelo.
+TEACH_PHRASE = "dame el vídeo más visto del canal Hrom"
+TEACH_STEPS: tuple[tuple[str, list[Step]], ...] = (
+    (
+        "abre el canal Hrom en youtube",
+        [
+            ("call", ("web_site_search", {"sitio": "YouTube", "consulta": "Hrom"})),
+            ("call", ("browser_snapshot", {})),
+            _click(lambda line: 'link "Hrom"' in line and "/@" in line),
+            ("say", "Estoy en el canal."),
+        ],
+    ),
+    ("pestaña vídeos", [_click(lambda line: 'tab "Vídeos"' in line), ("say", "Estoy en Vídeos.")]),
+    ("ordena por populares", [_click(lambda line: 'button "Populares"' in line), ("say", "Ordenado.")]),
+    ("abre el primero", [_click(lambda line: "/watch" in line), ("say", "Abierto.")]),
+)
+
+
 @dataclass(frozen=True)
 class Order:
     text: str

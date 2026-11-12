@@ -133,3 +133,11 @@ async def test_el_banco_mide_las_cinco_ordenes_sin_tocar_el_pc() -> None:
     hrom = filas[-1]
     assert hrom["herramientas"][-1] == "browser.click" and "Corrección" not in hrom["respuesta"]
     assert "**Total**" in table(filas)
+
+
+async def test_con_recetas_y_la_de_hrom_ensenada_la_segunda_pasada_no_llama_al_modelo() -> None:
+    filas = await run(passes=2, recipes=True, teach=True)
+    primera, segunda = filas[:5], filas[5:]
+    assert primera[-1]["ruta"] == "receta" and primera[-1]["llamadas_modelo"] == 0  # Hrom, enseñada
+    assert all(f["llamadas_modelo"] == 1 for f in primera[:4])
+    assert all(f["ruta"] == "receta" and f["llamadas_modelo"] == 0 for f in segunda), segunda
