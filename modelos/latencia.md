@@ -67,3 +67,44 @@ El simulador usa estas cifras: 0,3 s fijos + tokens nuevos / 33 + tokens generad
 | pausa el vídeo de YouTube | 3 | 39,9 s | listó sesiones y luego pausó |
 | dame el vídeo más visto del canal Hrom | 5 | 94,1 s | **falló**: abrió el canal y se quedó a medias |
 | **Total** | **16** | **236,9 s** | |
+
+## Después de la fase 4
+
+### Simulada (mismo modelo de latencia, mismas órdenes)
+
+| Pasada | Orden | Antes: llamadas · tiempo | Solo bloque 1 (sin recetas) | Con recetas y Hrom enseñada |
+|---|---|---|---|---|
+| 1 | abre Spotify | 3 · 137,2 s | 1 · 127,2 s | 1 · 127,2 s (prompt en frío) |
+| 1 | cierra la calculadora | 2 · 12,1 s | 1 · 10,1 s | 1 · 10,1 s |
+| 1 | búscame en YouTube cómo hacer mochis | 2 · 22,6 s | 1 · 13,1 s | 1 · 13,1 s |
+| 1 | pausa el vídeo de YouTube | 2 · 15,1 s | 1 · 15,3 s | 1 · 15,3 s |
+| 1 | dame el vídeo más visto del canal Hrom | 7 · 86,9 s | 7 · 90,7 s | **0 · receta** |
+| 2 | abre Spotify | 3 · 23,9 s | 1 · 8,3 s | **0 · receta** |
+| 2 | cierra la calculadora | 2 · 12,1 s | 1 · 10,1 s | **0 · receta** |
+| 2 | búscame en YouTube cómo hacer mochis | 2 · 22,6 s | 1 · 13,1 s | **0 · receta** |
+| 2 | pausa el vídeo de YouTube | 2 · 64,3 s | 1 · 8,2 s | **0 · receta** |
+| 2 | dame el vídeo más visto del canal Hrom | 7 · 167,4 s | 7 · 90,7 s | **0 · receta** |
+| | **Total** | **32 · 564,3 s** | **22 · 387,0 s** | **4 · 165,8 s** |
+
+Sin el arranque en frío de la primera orden (que paga cualquier versión una vez tras cambiar el prompt), el total pasa de
+~427 s a ~39 s. En el banco las herramientas son dobles y tardan milisegundos; en el PC de verdad, abrir Chrome o una
+app añade sus segundos, igual antes que después.
+
+### Real (`qwen3:4b-instruct`, con `--calentar`, recetas y la de Hrom enseñada antes)
+
+| Pasada | Orden | Antes (una pasada) | Después |
+|---|---|---|---|
+| 1 | abre Spotify | 3 · 31,3 s | 1 · 9,5 s |
+| 1 | cierra la calculadora | 3 · 37,9 s (y mintió) | 1 · 12,3 s |
+| 1 | búscame en YouTube cómo hacer mochis | 2 · 33,6 s | 1 · 16,3 s |
+| 1 | pausa el vídeo de YouTube | 3 · 39,9 s | 1 · 20,7 s |
+| 1 | dame el vídeo más visto del canal Hrom | 5 · 94,1 s (**falló**) | **0 · receta** (llega al más visto) |
+| | **Total pasada 1** | **16 · 236,9 s** | **4 · 58,8 s** |
+| 2 | abre Spotify | — | 0 · receta |
+| 2 | cierra la calculadora | — | 1 · 53,6 s (planificador: ver nota) |
+| 2 | búscame en YouTube… / pausa… / Hrom | — | 0 · receta |
+
+Notas: el modelo real cerró la calculadora con dos llamadas a `apps.close` (la primera no salió bien), así que ese
+turno no cumple «todo salió bien» y no se aprendió: en la 2.ª pasada vuelve al planificador. Esos 53,6 s incluyen un
+recorte del historial (relee la conversación una vez). La enseñanza de Hrom en el banco la hace un guion simulado; con el
+canal real queda como prueba manual.
