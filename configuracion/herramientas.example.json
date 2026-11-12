@@ -1,5 +1,9 @@
 {
   "_leeme": "Grupos de herramientas que solo se enseñan al modelo si la petición da pistas de necesitarlos (con DIOGENES_HERRAMIENTAS=relevantes). Las palabras van sin acentos ni mayúsculas. Las demás herramientas se enseñan siempre.",
+  "busqueda_forzada": {
+    "_leeme": "Si una orden se contesta sin mirar nada y trae alguna de estas palabras, se comprueba qué suena (media.sessions) en vez de buscar una app.",
+    "multimedia": ["pausa", "pausar", "pausalo", "pausala", "reanuda", "reanudar", "reanudalo", "suena", "sonando", "reproduciendo", "volumen", "silencio", "silencia", "mutea", "cancion", "musica"]
+  },
   "grupos": {
     "media": {
       "prefijo": "media.",

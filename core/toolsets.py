@@ -30,9 +30,10 @@ class Group:
 
 
 class ToolSelector:
-    def __init__(self, groups: tuple[Group, ...], mode: str = ALL) -> None:
+    def __init__(self, groups: tuple[Group, ...], mode: str = ALL, media_cues: frozenset[str] = frozenset()) -> None:
         self._groups = groups
         self.mode = mode if mode in (ALL, RELEVANT) else ALL
+        self.media_cues = media_cues  # palabras que hacen de una orden algo multimedia (para la búsqueda forzada)
 
     @classmethod
     def load(cls, mode: str = ALL, directory: Path = CONFIG_DIR) -> ToolSelector:
@@ -44,8 +45,12 @@ class ToolSelector:
                     Group(key, spec["prefijo"], frozenset(normalize(w) for w in spec["pistas"]))
                     for key, spec in data["grupos"].items()
                 )
-                return cls(groups, mode)
+                cues = data.get("busqueda_forzada", {}).get("multimedia", [])
+                return cls(groups, mode, frozenset(normalize(w) for w in cues))
         return cls((), mode)
+
+    def is_media(self, text: str) -> bool:
+        return bool(set(normalize(text).split()) & self.media_cues)
 
     def _group_of(self, mcp_name: str) -> Group | None:
         return next((g for g in self._groups if mcp_name.startswith(g.prefix)), None)

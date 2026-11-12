@@ -60,6 +60,10 @@ FILLERS = frozenset(
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
 # Herramientas que buscan y abren por nombre en un paso: se juzgan como apps.launch (un config antiguo no las lista).
 OPEN_BY_NAME = ("apps.open",)
+# Una URL o un dominio escrito en el mensaje ("youtube.com", "https://es.wikipedia.org/wiki/X").
+WEB_ADDRESS = re.compile(
+    r"https?://\S+|\b(?:[\w-]+\.)+(?:com|es|org|net|io|tv|dev|app|edu|gob|info|eu|co|me)\b(?:/\S*)?", re.IGNORECASE
+)
 # Conjunciones que encadenan otra orden ("abre Spotify Y pon Daft Punk").
 CHAINING = frozenset({"y", "e", "luego", "despues", "tambien", "ademas", "and", "then"})
 
@@ -200,6 +204,37 @@ class IntentGate:
         if not target or all(w in PRONOUNS for w in target):
             return None  # "ábrelo", "abre eso": no hay nada que buscar (lo resuelve la conversación)
         return " ".join(target)
+
+    def site_request(self, user_text: str) -> tuple[str, str] | None:
+        """Si la orden es sobre una web: (sitio o URL, consulta). La consulta va vacía si no busca nada.
+
+        "búscame en YouTube cómo hacer mochis" → ("youtube", "como hacer mochis"); "busca mochis en youtube" →
+        ("youtube", "mochis"); "abre ejemplo.com" → ("ejemplo.com", ""). Una web se reconoce por una URL o un dominio, o
+        por "en <sitio>" junto a un verbo de buscar; no hay ninguna web escrita a mano."""
+        url = WEB_ADDRESS.search(user_text)
+        target = self.action_target(user_text) or ""
+        if url is not None:
+            site = url.group(0).rstrip(".,;:!?)»\"'")
+            kept = [w for w in target.split() if w not in normalize(site).split() and w not in FILLERS]
+            while kept and kept[-1] in ("en", "de", "del"):
+                kept.pop()
+            query = " ".join(kept)
+            searching = any(
+                self.verb_root(w) in self._config.verbs.get("buscar", ()) for w in normalize(user_text).split()
+            )
+            return site, query if searching else ""
+        words = normalize(user_text).split()
+        if not any(self.verb_root(w) in self._config.verbs.get("buscar", ()) for w in words[:3]):
+            return None
+        parts = target.split()
+        if len(parts) >= 3 and parts[0] == "en":  # "en youtube cómo hacer mochis"
+            return parts[1], " ".join(parts[2:])
+        if "en" in parts[1:-1] or (len(parts) >= 3 and parts[-2] == "en"):  # "mochis en youtube"
+            cut = len(parts) - 1 - parts[::-1].index("en")
+            site, query = " ".join(parts[cut + 1 :]), " ".join(parts[:cut])
+            if site and query and len(site.split()) <= 2:
+                return site, query
+        return None
 
     def is_compound(self, user_text: str) -> bool:
         """¿Encadena varias órdenes? Una conjunción ("y", "luego", "después") seguida más adelante de otro verbo."""

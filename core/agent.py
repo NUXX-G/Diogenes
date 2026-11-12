@@ -171,6 +171,7 @@ TOOL_LABELS = {
 }
 LABEL_BY_PREFIX = {"browser": "el navegador", "media": "el control multimedia", "apps": "las apps", "web": "la web"}
 SEARCH_TOOL = "apps.search"  # la que se fuerza si el modelo contesta a una orden sin haber mirado nada
+SITE_SEARCH_TOOL, WEB_OPEN_TOOL, MEDIA_SESSIONS_TOOL = "web.site_search", "web.open", "media.sessions"
 
 
 def _label(tool: str) -> str:
@@ -825,7 +826,7 @@ class Agent:
             if response.tool_calls:
                 calls = _unique_calls(response.tool_calls)
                 self._history.append(Message("assistant", response.content, calls))
-            elif (forced := self._forced_search(target, to_mcp, result.steps)) is not None:
+            elif (forced := self._forced_search(target, to_mcp, result.steps, original)) is not None:
                 # Pidió una acción y el modelo contesta sin mirar nada ("no tengo información sobre X"): se busca en
                 # código y se le devuelve el resultado antes de responder. Su respuesta sin comprobar se descarta.
                 target = None  # una sola vez por turno
@@ -1124,13 +1125,26 @@ class Agent:
             return str(data["mensaje"])
         return None
 
-    @staticmethod
-    def _forced_search(target: str | None, to_mcp: dict[str, str], steps: list[Step]) -> ToolCall | None:
-        """La búsqueda que se fuerza cuando el usuario pidió una acción y el modelo terminó sin llamar a nada."""
-        if target is None or steps:
+    def _forced_search(
+        self, target: str | None, to_mcp: dict[str, str], steps: list[Step], request: str = ""
+    ) -> ToolCall | None:
+        """La comprobación que se fuerza cuando el usuario pidió algo y el modelo terminó sin llamar a nada: buscar en la
+        web si nombra un sitio o una URL, mirar qué suena si es multimedia y, si no, buscar la app."""
+        if steps or target is None and not self._selector.is_media(request):
             return None
-        wire = next((w for w, mcp in to_mcp.items() if mcp == SEARCH_TOOL), None)
-        return ToolCall(wire, {"nombre": target}) if wire else None
+        wire = {mcp: w for w, mcp in to_mcp.items()}
+        if target is not None and (site := self._intent.site_request(request)) is not None:
+            sitio, consulta = site
+            if consulta and SITE_SEARCH_TOOL in wire:
+                return ToolCall(wire[SITE_SEARCH_TOOL], {"sitio": sitio, "consulta": consulta})
+            if not consulta and "." in sitio and WEB_OPEN_TOOL in wire:
+                url = sitio if sitio.startswith(("http://", "https://")) else f"https://{sitio}"
+                return ToolCall(wire[WEB_OPEN_TOOL], {"url": url})
+        if self._selector.is_media(request) and MEDIA_SESSIONS_TOOL in wire:
+            return ToolCall(wire[MEDIA_SESSIONS_TOOL], {})
+        if target is None or SEARCH_TOOL not in wire:
+            return None
+        return ToolCall(wire[SEARCH_TOOL], {"nombre": target})
 
     def _drop_old_pages(self) -> None:
         """Una página son ~3 kB: solo la última sirve (los refs viejos no valen) y varias revientan el contexto.
