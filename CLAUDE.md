@@ -158,9 +158,59 @@ Damos control amplio, pero con estas reglas que no se negocian:
   - **Por qué no `qwen3.5:4b` por defecto**: en la batería de la PR #1 llamó a una herramienta inyectada desde un correo (`qwen3:4b-instruct` resistió 3/3, `qwen3.5:4b` 0/3). En modo personal el agente controla el PC, así que el riesgo pesa más. Detalle en [`modelos/comparativa.md`](modelos/comparativa.md).
   - **Ningún modelo es la defensa contra inyecciones.** La barrera real es la confirmación impuesta en código para las acciones irreversibles (ver Seguridad mínima); elegir un modelo más resistente no la relaja.
   - **Limitación del hardware del aula (medido el 2026-11-10 en el PC de clase, solo CPU, `size_vram: 0`, 6 hilos)**: `qwen3:4b-instruct` tarda **5–10 s por llamada al modelo** con el modelo cargado (5 s el primer paso, ~10 s el segundo, con el prompt de sistema y las 13 herramientas) y **~85 s la primera llamada** si estaba descargado (carga en frío). Una tarea de 4–6 pasos ronda por tanto 30–60 s, y tras 5 min sin uso, 90 s más. Por eso `OllamaProvider` envía `keep_alive` de `30m` (configurable con `DIOGENES_OLLAMA_KEEP_ALIVE`). No es un fallo de Diogenes: los atajos del router (media, volumen) no usan el LLM y responden al instante, y la visión (escalón 6) con `qwen3.5:4b` será mucho más lenta. Una latencia de 30–100 s por paso solo aparece en frío o con el equipo cargado.
-- **Latencia** (medida el 2026-11-12, detalle en [`modelos/latencia.md`](modelos/latencia.md)): en la CPU del aula generar va a ~3,4 tokens/s y leer prompt nuevo a ~33 tokens/s; lo que Ollama ya tiene en su caché de prefijo sale casi gratis. Reglas que salen de ahí: (1) cada llamada al modelo que se pueda evitar se evita (`apps.open`, respuesta por plantilla, elección en código, recetas); (2) **no se cambia el principio del prompt** entre llamadas: prompt de sistema estable, herramientas en orden fijo, historial recortado a saltos (hasta la mitad de los topes) en vez de un turno cada vez; (3) **lo que ve el modelo de cada página se recorta** a ~1600 caracteres (`MODEL_PAGE_CHARS`; las recetas usan la página entera) y `web.site_search`/`web.open` ya traen la página, sin snapshot aparte; (4) **se enseñan todas las herramientas** (`DIOGENES_HERRAMIENTAS=relevantes` existe pero es más lento: volver a enseñar las quitadas cuesta ~20 s); (5) `num_ctx` fijo (`DIOGENES_OLLAMA_NUM_CTX`, 8192): cambiarlo recarga el modelo. Medir con `python -m core.bench` (LLM simulado) o `--real`; el CLI enseña por turno la ruta, las llamadas al modelo, los segundos de leer y generar y el total, y lo guarda en `logs/core-*.jsonl` sin el texto del usuario.
+- **Latencia**: ver la sección Rendimiento en CPU.
 - **Ollama**: `DIOGENES_OLLAMA_BASE_URL` configurable. En modo personal el valor por defecto es `http://127.0.0.1:11434` (Ollama nativo); el del compose (puerto `11435` del anfitrión) no se toca. Llevan el prefijo `DIOGENES_` porque `OLLAMA_MODEL` y `OLLAMA_BASE_URL` del `.env` ya los usa el stack Docker con otros valores.
 - Versiones fijadas en `pyproject.toml` y `uv.lock`. Nada de rangos abiertos.
+
+## Rendimiento en CPU
+
+El PC de clase manda sobre todo lo demás: HP ProDesk 400 G5, i5-8600 (6 núcleos / 6 hilos, AVX2), **16 GB DDR4 en doble canal a 2667 MT/s** (2 × 8 GB, `ChannelA` y `ChannelB`; comprobado el 2026-11-12), gráfica integrada inútil para LLM. Los portátiles con GPU son un extra.
+
+### Lo medido (2026-11-12, Ollama 0.40.16, `qwen3:4b-instruct` Q4_K_M; detalle en [`modelos/latencia.md`](modelos/latencia.md))
+
+- **Hilos**: con los que pone Ollama por defecto se lee el prompt a ~33 tok/s y se genera a 2,5 tok/s con 4k de contexto; con **`num_thread` 6**, a 53–66 tok/s y 4,2 tok/s. Es gratis. Cambiar `num_thread` o `num_ctx` entre peticiones recarga el modelo (3–6 s): se fijan al arrancar.
+- **Generar se hunde con el contexto** (6 hilos): 9,0 tok/s con 256 tokens, 8,7 con 1k, 6,8 con 2,1k y 4,2 con 4,2k. Recortar el prompt acelera también cada token de salida, no solo la lectura.
+- **Lo que ya está en la caché de prefijo de Ollama sale casi gratis**; lo nuevo cuesta. Ollama guarda un solo prefijo.
+- **Lo que mandamos**: el prompt de sistema son **2086 tokens** (7500 caracteres) y los esquemas de las 17 herramientas **~1650**; antes de que el usuario hable ya hay ~3,7k tokens. El historial llega a 12 000 caracteres y cada página a 1600.
+- La red del centro deja pasar NVIDIA, Groq, Cerebras, Gemini, OpenRouter, GitHub Models, Telegram y Hugging Face (probado sin claves).
+
+### Niveles y objetivos
+
+| Nivel | Qué resuelve | Objetivo en el PC de clase |
+|---|---|---|
+| N0 sin LLM | atajos, elección, alias, recetas, recordatorios | < 300 ms en decidir (+ lo que tarde la app) |
+| N1 clasificador sin LLM | charla / acción / atajo / receta (reglas + `rapidfuzz`; `model2vec` solo si las reglas fallan más de un 10 %) | < 50 ms |
+| N2 personaje | charla sin herramientas, ≤ 25 palabras | reacción < 300 ms (animación y frase pregrabada), primera palabra hablada < 3 s, respuesta < 6 s |
+| N3 planificador | acción simple la primera vez | ≤ 5 s |
+| N3 planificador | tarea de navegador de 4–6 pasos | ≤ 45 s, y receta después |
+| Arranque en frío | primera orden | 0 visible: precarga al arrancar, en segundo plano |
+| Visión | último recurso | 30–120 s, avisando |
+
+### Reglas
+
+1. **Cada llamada al modelo que se pueda evitar se evita**: atajos, `apps.open`, elección en código, recetas, alias y respuesta por plantilla.
+2. **No se cambia el principio del prompt entre llamadas**: prompt de sistema estable, herramientas en orden fijo, historial recortado a saltos (hasta la mitad de los topes) en vez de un turno cada vez. Una personalidad editada invalida la caché una vez.
+3. **Lo que ve el modelo de cada página se recorta** (`MODEL_PAGE_CHARS`, ~1600; las recetas usan la página entera) y `web.site_search`/`web.open` ya traen la página, sin snapshot aparte.
+4. **Se enseñan todas las herramientas**, compactas (`DIOGENES_HERRAMIENTAS=relevantes` existe pero es más lento: volver a enseñar las quitadas cuesta ~20 s).
+5. **`num_thread` 6, `num_ctx` 4096 fijos y precarga al arrancar** (`DIOGENES_OLLAMA_NUM_THREAD`, `DIOGENES_OLLAMA_NUM_CTX`), con `keep_alive` de `30m`.
+6. **Dieta del prompt** (siguiente paso): prompt de sistema ≤ 700 tokens (lo que ya impone el código sale del prompt, con su test o caso de batería), herramientas ≤ 900, historial viejo resumido por el código, `num_predict` según el tipo de llamada.
+7. Nada cambia de modelo, cuantización ni motor sin pasar la batería (tool calling en español e inyección) y `core.bench --real` en el PC de clase.
+
+### Motor y modelos
+
+- **Ahora**: Ollama nativo con la configuración de arriba y `qwen3:4b-instruct` Q4_K_M.
+- **A medir**: `OLLAMA_FLASH_ATTENTION=1` y `OLLAMA_KV_CACHE_TYPE=q8_0` (con un `ollama serve` propio lanzado desde el repo en otro puerto, nada global); `llama-server` con `-t 6`, `--cache-reuse`, `--mlock`, dos slots con prefijo fijo y `--slot-save-path` (se cambia solo si gana ≥ 30 % o resuelve el arranque en frío, y si la política del centro deja ejecutarlo); cuantización Q4_K_M frente a Q4_0 y Q8_0.
+- **Candidatos**: LFM2.5-8B-A1B (primero), LFM2.5-2.6B, `gemma4:e2b`, `qwen3:1.7b` sin thinking y el Granite pequeño con herramientas. Qwen3-30B-A3B no cabe en 16 GB. Un modelo pequeño para N2 junto al de planificar solo si baja la charla de 6 s a menos de 3 s.
+- **Con GPU**: un 8B en Q4 (o Gemma 4 E4B con visión); el tamaño del prompt deja de mandar.
+- **Nube** (solo modo personal, fase de nube): `OpenAICompatProvider` desactivado por defecto, con caída a local, filtro de datos y la misma puerta. Las cifras de los tiers gratuitos cambian y las fuentes no coinciden: se comprueban con la clave en la mano.
+
+### Qué sirve también a la versión de clase
+
+Se mide aquí, pero se aplica y se revisa **en el repo de clase**, contra el enunciado: `num_thread`, `keep_alive` y precarga, `num_ctx` real (la caché KV de qwen3-4B ocupa ~144 KB por token en f16: 8k ≈ 1,2 GB y 64k ≈ 9,4 GB, que no cabe con el límite por defecto de WSL2), la curva de generación según el contexto, cuantización, máximo de tokens de salida, temperatura/top-p/top-k, prompt corto y herramientas compactas, y flash attention con caché KV q8. Son material de sus Fases 2 y 3. No sirven allí: `llama-server`, el router sin LLM, las recetas y el clasificador. La nube, **nunca**.
+
+### Medición
+
+`python -m core.bench` (LLM simulado) y `--real`. Cada fila debe guardar tokens de prefill nuevos y totales, segundos de leer y de generar, tok/s, tiempo hasta la primera palabra (cuando haya streaming), aciertos de tool calling y RAM del modelo. El CLI enseña por turno la ruta, las llamadas al modelo, los segundos de leer y generar y el total, y lo guarda en `logs/core-*.jsonl` sin el texto del usuario.
 
 ## Estructura del repo
 
