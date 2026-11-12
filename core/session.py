@@ -12,7 +12,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from core.agent import Agent, AgentResult
+from core.agent import TOOL_LABELS, Agent, AgentResult
 from core.llm.base import LLMError
 from core.metrics import MetricsLog, describe
 
@@ -24,6 +24,17 @@ PARAR_ALIAS = frozenset({PARAR, "/para"})  # "/para" es el mismo botón: se escr
 NUEVO = "/nuevo"
 AFIRMA = frozenset({"s", "si", "sí", "y", "yes"})
 RELEASE_TIMEOUT_SECONDS = 5.0
+
+
+def confirmation_text(tool: str, args: dict[str, Any]) -> str:
+    """La pregunta de la ⚠: qué se va a hacer y sobre qué app y ventanas reales, nunca un id interno."""
+    label = TOOL_LABELS.get(tool, tool)
+    if args.get("app"):
+        ventanas = f" — ventanas: {args['ventanas']}" if args.get("ventanas") else ""
+        motivo = f" ({args['motivo']})" if args.get("motivo") else ""
+        return f"¿Confirmas {label}: {args['app']}{ventanas}{motivo}?"
+    shown = {k: v for k, v in args.items() if k != "id"}
+    return f"Confirmar {tool}({shown})?"
 
 
 class Session:
@@ -51,7 +62,7 @@ class Session:
     async def confirm(self, tool: str, args: dict[str, Any]) -> bool:
         """La siguiente línea que escriba el usuario es la respuesta. Se pregunta aquí para no competir con `read`."""
         self._answer = asyncio.get_running_loop().create_future()
-        self._write(f"  ⚠ Confirmar {tool}({args})? [s/N]")
+        self._write(f"  ⚠ {confirmation_text(tool, args)} [s/N]")
         try:
             return await self._answer
         finally:

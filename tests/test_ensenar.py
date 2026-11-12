@@ -175,3 +175,13 @@ async def test_el_enlace_al_canal_se_encuentra_aunque_se_escriba_distinto() -> N
     assert resolve_target(canal, titulo, {"canal": "lofi girl"}) == "e2"  # el nombre contiene el valor
     chip = '[e1] button "Populares"'
     assert resolve_target(Target("tab", "populares"), chip, {}) == "e1"  # mismo chip, otro rol
+
+
+async def test_la_frase_de_la_receta_no_se_comprueba_como_un_nombre_de_la_pagina() -> None:
+    """Caso real: tras la receta salió «(Aviso: «dame el vídeo más visto del canal Hrom» no coincide literalmente…)»."""
+    pc, store = FakePC(), RecipeStore(":memory:")
+    async with Client(pc.server()) as client:
+        agent = Agent(FakeLLM(*guion_hrom()), McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        await ensenar(agent)
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert resultado.answer.startswith("Hecho como me enseñaste") and "Aviso" not in resultado.answer

@@ -160,6 +160,7 @@ class IntentGate:
         self._known_apps: dict[str, str] = {}
         self._web_hosts: set[str] = set()
         self._web_ok = False
+        self._open_seen: list[str] = []
         self._referent: tuple[str, str] | None = (
             None  # ("app" | "web", nombre o dominio) de lo último de lo que se habló
         )
@@ -338,13 +339,27 @@ class IntentGate:
         words = [w for w in normalize(text).split() if w not in skip and not self._is_verb_word(w)]
         return " ".join(words)
 
-    def close_target(self, text: str) -> str | None:
+    def close_target(self, text: str, *, whole: bool = False) -> str | None:
         """La app que el mensaje pide cerrar, sin el modo ("cierra a la fuerza el bloc de notas" → "bloc de notas")."""
         target = self.action_target(text)
         if target is None:
             return None
-        words = [w for w in target.split() if w not in self._config.mode_words and w not in FILLERS]
+        cut: list[str] = []
+        for w in target.split():
+            if w in CHAINING and not whole:  # «cierra paint y dime la hora»: lo de después es otra orden
+                break
+            cut.append(w)
+        words = [w for w in cut if w not in self._config.mode_words and w not in FILLERS]
         return " ".join(words) or None
+
+    def referent_app(self) -> str | None:
+        """La app de la que se habla ("ciérralo"), si la hay."""
+        return self._referent[1] if self._referent and self._referent[0] == "app" else None
+
+    @property
+    def open_seen(self) -> list[str]:
+        """Las apps que la última llamada a apps.abiertas encontró abiertas."""
+        return list(self._open_seen)
 
     def names_app(self, name: str) -> bool:
         """¿El mensaje del turno nombra esa app?"""
@@ -417,6 +432,13 @@ class IntentGate:
         """Aprende de lo que se ejecutó: qué apps existen (para saber su nombre) y en qué webs se está trabajando."""
         data = _ok(output)
         if data is None:
+            return
+        if tool == "apps.abiertas":
+            names = [str(a["nombre"]) for a in data.get("apps") or [] if isinstance(a, dict) and a.get("nombre")]
+            self._open_seen = names or self._open_seen
+            for name in names:
+                if self._names_app(name):
+                    self._referent = ("app", name)
             return
         if tool == "apps.search":
             for item in (data.get("resultados") or []) + (data.get("opciones") or []):

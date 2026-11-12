@@ -116,7 +116,8 @@ async def test_el_verbo_manda_abrir_no_cerrar() -> None:
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("no"))
     preguntas = Preguntas()
     await agente(llm, backend, preguntas).run("abre el bloc de notas")
-    assert backend.calls[1:] == [("apps.close", {"id": "startapps:bloc", "nombrado": False})]  # hands decide y pregunta
+    cierre = {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": False}
+    assert backend.calls[1:] == [("apps.close", cierre)]  # hands decide y pregunta
     assert preguntas.vistas[0][0] == "apps.close"
 
 
@@ -125,7 +126,7 @@ async def test_cerrar_lo_que_el_usuario_pidio_cerrar_va_directo() -> None:
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("ok"))
     preguntas = Preguntas()
     await agente(llm, backend, preguntas).run("cierra el bloc de notas")
-    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": True})
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": True})
     assert preguntas.vistas == []
 
 
@@ -135,7 +136,7 @@ async def test_el_modelo_no_puede_decir_que_el_usuario_nombro_la_app() -> None:
         llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc", nombrado=True), decir("no")
     )
     await agente(llm, backend, Preguntas()).run("búscame el bloc de notas")
-    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": False})
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": False})
 
 
 # --- elecciones y confirmaciones de turnos anteriores cuentan como pedidas -------------------------------------
@@ -375,10 +376,18 @@ async def test_un_nombre_en_lugar_del_id_en_apps_close_cuenta_como_pedido_si_lo_
     assert sent["nombrado"] is True and preguntas.vistas == []
 
 
-async def test_un_nombre_en_apps_close_que_no_dijiste_no_cuenta_como_pedido() -> None:
+async def test_un_nombre_en_apps_close_que_no_dijiste_se_cambia_por_el_que_dijiste() -> None:
+    """El modelo quiere cerrar la calculadora cuando el usuario pidió el notepad: se cierra lo que se pidió."""
     backend = FakeBackend(names=TOOLS)
-    llm = FakeLLM(llamar("apps_close", id="calculadora"), decir("hecho"))
+    llm = FakeLLM(llamar("apps_close", nombre="calculadora"), decir("hecho"))
     await agente(llm, backend).run("cierra el notepad")
+    assert next(a for n, a in backend.calls if n == "apps.close") == {"nombre": "notepad", "nombrado": True}
+
+
+async def test_sin_nada_que_diga_el_mensaje_un_nombre_que_no_dijiste_no_cuenta_como_pedido() -> None:
+    backend = FakeBackend(names=TOOLS)
+    llm = FakeLLM(llamar("apps_close", nombre="calculadora"), decir("hecho"))
+    await agente(llm, backend).run("hola")
     assert next(a for n, a in backend.calls if n == "apps.close")["nombrado"] is False
 
 
