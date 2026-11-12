@@ -19,7 +19,7 @@ from hands.apps.index import AppIndex
 from hands.apps.models import AppEntry
 from hands.system.closer import AppCloser, CloseConfig, matches
 from hands.system.windows import Win
-from tests.test_agent import FakeLLM, decir, llamar
+from tests.test_agent import FakeBackend, FakeLLM, decir, llamar
 
 NOTEPAD = AppEntry(
     "startapps:bloc", "Bloc de notas", "startapps", "shell", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
@@ -326,7 +326,7 @@ async def test_las_herramientas_de_cierre_solo_existen_si_hay_closer() -> None:
         sin = {t.name for t in (await client.list_tools()).tools}
     async with Client(hands_server.build_server(AppIndex(), closer=closer(FakeWindows()))) as client:
         con = {t.name for t in (await client.list_tools()).tools}
-    assert con - sin == {"apps.close", "apps.force_close"}
+    assert con - sin == {"apps.close", "apps.force_close", "apps.abiertas"}
 
 
 def test_forzar_el_cierre_pide_confirmacion_aunque_el_json_del_usuario_no_lo_liste() -> None:
@@ -473,3 +473,53 @@ async def test_force_close_tambien_resuelve_por_nombre(servidor_con_bloc: Any) -
     async with Client(server) as client:
         res = json.loads((await client.call_tool("apps.force_close", {"id": "calculadora"})).content[0].text)
     assert res["ok"] is False and "no está abierta" in res["mensaje"] and windows.terminados == []
+
+
+# --- qué está abierto y cierres con un id que no es el pedido -------------------------------------------------------
+
+
+async def test_apps_abiertas_dice_si_algo_esta_abierto_y_lista_las_ventanas(servidor_con_bloc: Any) -> None:
+    server, _ = servidor_con_bloc
+    async with Client(server) as client:
+        bloc = json.loads((await client.call_tool("apps.abiertas", {"nombre": "bloc de notas"})).content[0].text)
+        paint = json.loads((await client.call_tool("apps.abiertas", {"nombre": "paint"})).content[0].text)
+        todas = json.loads((await client.call_tool("apps.abiertas", {})).content[0].text)
+    assert bloc["abierta"] is True and paint["abierta"] is False
+    assert todas["abiertas"] == [{"titulo": "Sin título - Bloc de notas", "proceso": "notepad.exe"}]
+
+
+def test_preguntar_si_esta_abierto_no_es_pedir_abrir() -> None:
+    gate = IntentGate.load()
+    gate.begin_turn("busca si hay un bloc de notas abierto")
+    assert gate.asking_state() and gate.check("apps.launch", {"id": "bloc de notas"}).blocked
+    assert gate.state_target("busca si hay un bloc de notas abierto") == "bloc de notas"
+    gate.begin_turn("abre el bloc de notas si no está abierto")
+    assert not gate.asking_state() and gate.check("apps.open", {"nombre": "bloc de notas"}).allowed
+
+
+async def test_la_pregunta_de_estado_contestada_sin_mirar_fuerza_apps_abiertas() -> None:
+    backend = FakeBackend(
+        {"apps.abiertas": json.dumps({"ok": True, "abierta": True, "mensaje": "Sí: Bloc de notas está abierta."})},
+        names=("apps.search", "apps.launch", "apps.abiertas"),
+    )
+    llm = FakeLLM(decir("No lo sé."))
+    resultado = await Agent(llm, backend, policy=ConfirmationPolicy(["apps.force_close"])).run(
+        "¿está abierto el bloc de notas?"
+    )
+    assert backend.calls == [("apps.abiertas", {"nombre": "bloc de notas"})]
+    assert resultado.answer == "Sí: Bloc de notas está abierta."
+
+
+async def test_cerrar_con_un_id_de_otra_app_del_historial_usa_el_nombre_del_mensaje(servidor_con_bloc: Any) -> None:
+    """Caso real: «cierra a la fuerza el bloc de notas» llegó con el id de Registry Editor y contestó con otro nombre."""
+    server, windows = servidor_con_bloc
+    gate = IntentGate.load()
+    gate.observe(
+        "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:paint", "nombre": "Paint"}]})
+    )
+    llm = FakeLLM(llamar("apps_close", id="startapps:paint"))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]), intent=gate)
+        resultado = await agent.run("cierra el bloc de notas")
+    assert resultado.steps[0].arguments["id"] == "bloc de notas"
+    assert resultado.answer == "He cerrado Bloc de notas." and windows.windows == []

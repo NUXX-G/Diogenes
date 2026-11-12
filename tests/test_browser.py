@@ -261,7 +261,7 @@ def test_compact_quita_enlaces_sin_nombre_y_encabezados_repetidos() -> None:
 
 
 async def test_el_clic_dice_a_que_enlace_iba_para_comprobar_que_se_abrio() -> None:
-    svc, page = servicio(FakePage('- link "Mi vídeo" [ref=e1] [cursor=pointer]:\n  - /url: /watch?v=abc'))
+    svc, _page = servicio(FakePage('- link "Mi vídeo" [ref=e1] [cursor=pointer]:\n  - /url: /watch?v=abc'))
     await svc.open("https://www.youtube.com/@hrom")
     res = await svc.click("e1")
     assert res["enlace"] == "https://www.youtube.com/watch?v=abc"

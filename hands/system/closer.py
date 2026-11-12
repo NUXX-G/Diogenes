@@ -135,6 +135,10 @@ class AppCloser:
             return folder_windows(entry, windows)
         return [w for w in windows if matches(entry, w)]
 
+    def open_windows(self) -> list[Win]:
+        """Las ventanas abiertas que no son de Diogenes ni del sistema."""
+        return [w for w in self._backend.list_windows() if not self._protected(w)]
+
     def is_open(self, entry: AppEntry) -> bool:
         """¿Tiene alguna ventana abierta ahora mismo?"""
         return bool(self._windows_of(entry))

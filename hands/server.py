@@ -350,6 +350,38 @@ def build_server(
             }
 
         @server.tool(
+            name="apps.abiertas",
+            description=(
+                "Dice qué hay abierto. Con 'nombre', si esa app (o carpeta, o archivo) está abierta ahora mismo; sin "
+                "él, la lista de ventanas abiertas. Úsala para preguntas como «¿está abierto X?» o «qué tengo "
+                "abierto»: no abre ni cierra nada."
+            ),
+        )
+        async def apps_abiertas(nombre: str = "") -> dict[str, Any]:
+            async def run() -> dict[str, Any]:
+                if not nombre.strip():
+                    wins = await asyncio.to_thread(closer.open_windows)
+                    items = [{"titulo": w.title, "proceso": w.exe_name} for w in wins[:20]]
+                    return {"ok": True, "mensaje": f"{len(wins)} ventanas abiertas", "abiertas": items}
+                if (waiting := await not_ready()) is not None:
+                    return waiting
+                candidates = [r.entry for r in index.search(nombre, limit=5)]
+                is_open = await asyncio.gather(*(asyncio.to_thread(closer.is_open, e) for e in candidates))
+                running = [e.name for e, opened in zip(candidates, is_open, strict=True) if opened]
+                if not candidates:
+                    return {"ok": True, "abierta": False, "mensaje": f"No conozco ninguna app llamada «{nombre}»."}
+                if running:
+                    return {
+                        "ok": True,
+                        "abierta": True,
+                        "abiertas": running,
+                        "mensaje": f"Sí: {', '.join(running)} está abierta.",
+                    }
+                return {"ok": True, "abierta": False, "mensaje": f"No: {candidates[0].name} no está abierta."}
+
+            return await audited("apps.abiertas", {"nombre": nombre}, run)
+
+        @server.tool(
             name="apps.close",
             description=(
                 "Cierra una aplicación abierta (id de apps.search) como con el botón X: si tiene cambios sin guardar, "

@@ -47,7 +47,9 @@ class RecipeConfig:
     filler: tuple[tuple[str, ...], ...] = ()
     corrections: frozenset[str] = frozenset()
     ordinals: dict[str, int] = field(default_factory=dict)
-    read_only: frozenset[str] = frozenset({"apps.search", "browser.snapshot", "browser.current", "media.sessions"})
+    read_only: frozenset[str] = frozenset(
+        {"apps.search", "apps.abiertas", "browser.snapshot", "browser.current", "media.sessions"}
+    )
 
     @classmethod
     def load(cls, directory: Path = CONFIG_DIR) -> RecipeConfig:

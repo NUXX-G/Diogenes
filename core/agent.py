@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from core.choices import Option, PendingChoice, ask_again, is_affirmation, parse_options, resolve
-from core.intent import IntentGate
+from core.intent import ID_LIKE, IntentGate
 from core.llm.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from core.mcp_client import ToolBackend
 from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
@@ -82,6 +82,8 @@ el más visto".
 - Cita productos y títulos tal cual aparecen en la página, sin quitar palabras (si pone "RTX 5060 Ti", di "Ti"). Si \
 lo que encontraste difiere de lo que pidió el usuario (pidió "RTX 5060" y es una "Ti"), dilo. Cita solo precios y \
 cifras que veas en la página; nunca los estimes ni los redondees.
+- Para saber si algo está abierto o qué hay abierto («¿está abierto X?», «busca si hay un X abierto», «qué \
+tengo abierto»): apps_abiertas, con el nombre o sin él. Nunca apps_launch ni apps_open para comprobarlo.
 - Si el usuario pide cerrar (cierra, ciérralo, cerrar, quita, sal de), NUNCA llames a apps_launch, ni siquiera para \
 conseguir un id: usa apps_close directamente con el nombre que ha dicho.
 - Para cerrar una app: apps_close con su nombre o su id; solo cierra apps abiertas y nunca abre ninguna. Si el resultado dice sigue_abierta=true (la app preguntó por guardar o no se cerró) y el usuario quiere cerrarla, llama DIRECTAMENTE a apps_force_close con el mismo id: ya pide su propia confirmación formal, así que NO preguntes en texto si quiere forzarla. Si la app no está abierta, dilo y no la abras.
@@ -162,6 +164,7 @@ TOOL_LABELS = {
     "apps.search": "la búsqueda de apps",
     "apps.launch": "abrir la app",
     "apps.open": "abrir la app",
+    "apps.abiertas": "ver qué está abierto",
     "apps.close": "cerrar la app",
     "apps.force_close": "forzar el cierre",
     "media.key": "las teclas multimedia",
@@ -174,6 +177,8 @@ TOOL_LABELS = {
 LABEL_BY_PREFIX = {"browser": "el navegador", "media": "el control multimedia", "apps": "las apps", "web": "la web"}
 SEARCH_TOOL = "apps.search"  # la que se fuerza si el modelo contesta a una orden sin haber mirado nada
 SITE_SEARCH_TOOL, WEB_OPEN_TOOL, MEDIA_SESSIONS_TOOL = "web.site_search", "web.open", "media.sessions"
+OPEN_APPS_TOOL = "apps.abiertas"
+CLOSING_TOOLS = frozenset({"apps.close", "apps.force_close"})
 
 
 def _label(tool: str) -> str:
@@ -476,6 +481,7 @@ VERIFYING_TOOLS = frozenset(
     {
         "apps.search",
         "apps.open",
+        "apps.abiertas",
         "apps.close",
         "apps.force_close",
         "media.sessions",
@@ -721,6 +727,7 @@ class Agent:
         self._teaching_failed: list[str] = []  # frases guiadas en las que algo falló
         self._choice: tuple[PendingChoice, Option] | None = None  # la opción que acaba de elegir el usuario
         self._model_corrected = False  # _grounded tuvo que corregir la respuesta del modelo en este turno
+        self._request = ""  # el mensaje del usuario en este turno (la petición original si responde a una lista)
 
     def reset(self) -> None:
         self._history.clear()
@@ -789,6 +796,7 @@ class Agent:
             return AgentResult(answer, seconds=time.monotonic() - started)
 
         original, text = self._apply_pending_choice(request)
+        self._request = original
         hit = self._find_recipe(request) if text == request else None
         grant = self._grants(*hit) if hit else ""
         self._intent.begin_turn(self._mandate(request, text) + grant)
@@ -1217,7 +1225,11 @@ class Agent:
         if last.tool == "web.open" and data.get("ok") is True:
             url = args.get("url", "")
             return f"He abierto {url}." if covers(target, [url]) else None
-        if last.tool in ("media.control", "media.key") and data.get("ok") is True and data.get("mensaje"):
+        if (
+            last.tool in ("media.control", "media.key", OPEN_APPS_TOOL)
+            and data.get("ok") is True
+            and data.get("mensaje")
+        ):
             return str(data["mensaje"])
         return None
 
@@ -1226,9 +1238,12 @@ class Agent:
     ) -> ToolCall | None:
         """La comprobación que se fuerza cuando el usuario pidió algo y el modelo terminó sin llamar a nada: buscar en la
         web si nombra un sitio o una URL, mirar qué suena si es multimedia y, si no, buscar la app."""
-        if steps or target is None and not self._selector.is_media(request):
+        asking = self._intent.asking_state(request)
+        if steps or target is None and not asking and not self._selector.is_media(request):
             return None
         wire = {mcp: w for w, mcp in to_mcp.items()}
+        if asking and OPEN_APPS_TOOL in wire:  # "¿está abierto X?": se mira, nunca se abre
+            return ToolCall(wire[OPEN_APPS_TOOL], {"nombre": self._intent.state_target(request)})
         if target is not None and (site := self._intent.site_request(request)) is not None:
             sitio, consulta = site
             if consulta and SITE_SEARCH_TOOL in wire:
@@ -1295,12 +1310,27 @@ class Agent:
             return Step(name, dict(call.arguments), json.dumps(shown, ensure_ascii=False), True, step.asked)
         return Step(name, dict(call.arguments), step.result, step.ok, step.asked)
 
+    def _named_close_target(self, name: str, call: ToolCall) -> ToolCall:
+        """Un cierre con un id de otra app (sacado del historial: «Registry Editor» cuando se pidió cerrar el Bloc de
+        notas) se cambia por el nombre que dice el mensaje, y hands busca esa app entre las abiertas."""
+        app_id = str(call.arguments.get("id", ""))
+        if name not in CLOSING_TOOLS or not ID_LIKE.match(app_id):
+            return call
+        known = self._intent.app_name(app_id)
+        if known is not None and self._intent.names_app(known):
+            return call
+        target = self._intent.close_target(self._request)
+        if not target:
+            return call
+        return ToolCall(call.name, {**call.arguments, "id": target})
+
     async def _execute(self, call: ToolCall, to_mcp: dict[str, str], *, aliased: bool = False) -> Step:
         name = to_mcp.get(call.name)
         if name is None:
             return Step(call.name, call.arguments, f"ERROR: la herramienta '{call.name}' no existe", False)
         if not aliased and (via_alias := await self._via_alias(name, call, to_mcp)) is not None:
             return via_alias
+        call = self._named_close_target(name, call)
         asked = False
         verdict = self._intent.check(name, call.arguments)
         if verdict.blocked:
@@ -1308,8 +1338,8 @@ class Agent:
                 "ok": False,
                 "bloqueado": True,
                 "mensaje": (
-                    f"BLOQUEADO: el usuario ha pedido cerrar, no abrir ({verdict.target}). No abras nada. Para cerrar usa "
-                    "apps_close con el nombre de la app; si no está abierta, dilo."
+                    f"BLOQUEADO: {verdict.reason} ({verdict.target}). No abras nada. Para cerrar usa apps_close con el "
+                    "nombre de la app; para saber si está abierta, apps_abiertas; si no está abierta, dilo."
                 ),
             }
             return Step(name, call.arguments, json.dumps(blocked, ensure_ascii=False), False)

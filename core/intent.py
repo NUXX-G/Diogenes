@@ -58,6 +58,10 @@ FILLERS = frozenset(
     }
 )
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
+# Por si un confirmaciones.json antiguo no trae estas listas.
+DEFAULT_NOT_VERBS = ("abierto", "abierta", "abiertos", "abiertas", "cerrado", "cerrada", "cerrados", "cerradas")
+DEFAULT_STATE_WORDS = ("abierto", "abierta", "abiertos", "abiertas", "encendido", "encendida", "funcionando")
+DEFAULT_MODE_WORDS = ("fuerza", "forzando", "forzar", "forzado", "ya", "todo", "si", "hay", "esta", "tengo", "que")
 # Herramientas que buscan y abren por nombre en un paso: se juzgan como apps.launch (un config antiguo no las lista).
 OPEN_BY_NAME = ("apps.open",)
 # Una URL o un dominio escrito en el mensaje ("youtube.com", "https://es.wikipedia.org/wiki/X").
@@ -81,6 +85,9 @@ class IntentConfig:
     free_in_web: frozenset[str]
     generic_words: frozenset[str]
     blocked_when_closing: frozenset[str] = frozenset({"apps.launch"})
+    not_verbs: frozenset[str] = frozenset()  # "abierto" empieza como "abr*" pero no pide abrir nada
+    state_words: frozenset[str] = frozenset()  # "¿está abierto X?": pregunta, no orden
+    mode_words: frozenset[str] = frozenset()  # "a la FUERZA": cómo, no qué
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> IntentConfig:
@@ -99,6 +106,9 @@ class IntentConfig:
             free_in_web=frozenset(data.get("libres_en_web", [])),
             generic_words=frozenset(normalize(w) for w in data.get("palabras_genericas", [])),
             blocked_when_closing=frozenset(blocked),
+            not_verbs=frozenset(normalize(w) for w in data.get("no_verbos", DEFAULT_NOT_VERBS)),
+            state_words=frozenset(normalize(w) for w in data.get("estado", DEFAULT_STATE_WORDS)),
+            mode_words=frozenset(normalize(w) for w in data.get("palabras_de_modo", DEFAULT_MODE_WORDS)),
         )
 
     @classmethod
@@ -175,6 +185,8 @@ class IntentGate:
 
     def verb_root(self, word: str) -> str | None:
         """La raíz de `confirmaciones.json` con la que encaja la palabra ("ábreme" → "abr*"), o None si no es un verbo."""
+        if word in self._config.not_verbs:
+            return None
         for roots in self._config.verbs.values():
             for root in roots:
                 if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
@@ -182,6 +194,8 @@ class IntentGate:
         return None
 
     def _is_verb_word(self, word: str) -> bool:
+        if word in self._config.not_verbs:
+            return False
         for roots in self._config.verbs.values():
             for root in roots:
                 if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
@@ -273,12 +287,13 @@ class IntentGate:
                 latest, self._referent = max(positions), ("app", name)
 
     def _has_verb(self, groups: tuple[str, ...]) -> bool:
+        words = self._mandate - self._config.not_verbs
         for group in groups:
             for root in self._config.verbs.get(group, ()):
                 if root.endswith("*"):
-                    if any(w.startswith(root[:-1]) for w in self._mandate):
+                    if any(w.startswith(root[:-1]) for w in words):
                         return True
-                elif root in self._mandate:
+                elif root in words:
                     return True
         return False
 
@@ -308,10 +323,40 @@ class IntentGate:
         """El mensaje pide cerrar y no pide abrir nada: abrir sería lo contrario de lo pedido."""
         return self._has_verb(("cerrar",)) and not self._has_verb(("abrir",))
 
+    def asking_state(self, text: str | None = None) -> bool:
+        """¿Pregunta si algo está abierto ("¿está abierto el bloc?", "busca si hay un bloc de notas abierto") en vez de
+        pedir abrirlo? `text` None: el mensaje del turno actual."""
+        words = set(normalize(text).split()) if text is not None else self._mandate
+        if not words & self._config.state_words:
+            return False
+        roots = self._config.verbs.get("abrir", ())
+        return not any(self.verb_root(w) in roots and w not in ("quiero", "dame") for w in words)
+
+    def state_target(self, text: str) -> str:
+        """De qué app pregunta ("busca si hay un bloc de notas abierto" → "bloc de notas"); '' si de ninguna."""
+        skip = self._config.state_words | self._config.mode_words | FILLERS
+        words = [w for w in normalize(text).split() if w not in skip and not self._is_verb_word(w)]
+        return " ".join(words)
+
+    def close_target(self, text: str) -> str | None:
+        """La app que el mensaje pide cerrar, sin el modo ("cierra a la fuerza el bloc de notas" → "bloc de notas")."""
+        target = self.action_target(text)
+        if target is None:
+            return None
+        words = [w for w in target.split() if w not in self._config.mode_words and w not in FILLERS]
+        return " ".join(words) or None
+
+    def names_app(self, name: str) -> bool:
+        """¿El mensaje del turno nombra esa app?"""
+        return self._names_app(name)
+
     def check(self, tool: str, args: dict[str, Any]) -> Verdict:
         if tool in self._config.blocked_when_closing and self._only_closing():
             target = str(args.get("id") or args.get("nombre") or "")
             return Verdict(False, target, "has pedido cerrar, no abrir", blocked=True)
+        if tool in self._config.blocked_when_closing and self.asking_state():
+            target = str(args.get("id") or args.get("nombre") or "")
+            return Verdict(False, target, "preguntas si está abierto, no pides abrirlo", blocked=True)
         rule = self._config.tools.get(tool)
         if rule is None:
             if tool in self._config.free_in_web and not self._web_ok:
