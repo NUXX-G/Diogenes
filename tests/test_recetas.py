@@ -382,3 +382,42 @@ def test_al_abrir_la_base_se_fusionan_los_duplicados_que_ya_hubiera(tmp_path: An
     store.close()
     (unica,) = RecipeStore(db).all()
     assert unica.trigger == "<busc*> {consulta} en {sitio} [en modo incognito]" and unica.successes == 3
+
+
+# --- referencias ("ciérralo") ---------------------------------------------------------------------------------------
+
+
+async def test_un_cierre_pedido_con_un_pronombre_no_se_aprende() -> None:
+    """Caso real: de «ciérralo» salió la receta «<cierr*>», que cerraría siempre la misma app."""
+    store = RecipeStore(":memory:")
+    pc = FakePC()
+    pc.windows.open(APPS[1])
+    llm = FakeLLM(llamar("apps_abiertas", nombre="calculadora"), llamar("apps_close", nombre="Calculadora"))
+    async with Client(pc.server()) as client:
+        agent = agente(llm, client, store)
+        await agent.run("busca si hay una calculadora abierta")
+        resultado = await agent.run("ciérralo")
+        agent.flush()
+    assert resultado.answer == "He cerrado Calculadora." and store.all() == []
+
+
+@pytest.mark.parametrize(
+    ("frase", "solo_referencia"),
+    [
+        ("ciérralo", True),
+        ("ábrelo otra vez", True),
+        ("abre eso", True),
+        ("cierra la misma", True),
+        ("cierra paint", False),
+    ],
+)
+def test_que_mensajes_son_solo_una_referencia(frase: str, solo_referencia: bool) -> None:
+    assert GATE.refers_only(frase) is solo_referencia
+
+
+def test_al_arrancar_se_borran_las_recetas_aprendidas_de_un_pronombre() -> None:
+    store = RecipeStore(":memory:")
+    store.save(Recipe("<cierr*>", "ciérralo", [RecipeStep("apps.close", {"nombre": "Bloc de notas"})]))
+    buena = store.save(Recipe("<cierr*> {app}", "cierra paint", [RecipeStep("apps.close", {"nombre": "{app}"})]))
+    Agent(FakeLLM(), FakeBackend(), policy=POLICY, recipes=store)
+    assert [r.id for r in store.all()] == [buena]

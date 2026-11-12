@@ -68,6 +68,8 @@ OPEN_BY_NAME = ("apps.open",)
 WEB_ADDRESS = re.compile(
     r"https?://\S+|\b(?:[\w-]+\.)+(?:com|es|org|net|io|tv|dev|app|edu|gob|info|eu|co|me)\b(?:/\S*)?", re.IGNORECASE
 )
+# Coletillas que no nombran nada: "ábrelo OTRA VEZ", "ciérralo DE NUEVO".
+REPEAT_WORDS = frozenset({"otra", "vez", "de", "nuevo", "ahora", "mismo", "ya", "tambien"})
 # Conjunciones que encadenan otra orden ("abre Spotify Y pon Daft Punk").
 CHAINING = frozenset({"y", "e", "luego", "despues", "tambien", "ademas", "and", "then"})
 
@@ -258,6 +260,15 @@ class IntentGate:
             if word in CHAINING and any(self._is_verb_word(w) for w in words[i + 1 :]):
                 return True
         return False
+
+    def refers_only(self, user_text: str) -> bool:
+        """¿El objetivo del mensaje es solo un pronombre o una referencia ("ciérralo", "ábrelo", "abre eso", "la
+        misma")? Entonces lo que se hizo depende de la conversación, no de la frase: no sirve como receta."""
+        words = normalize(user_text).split()
+        target = self.action_target(user_text)
+        if not words or (target is not None and not set(target.split()) <= REPEAT_WORDS):
+            return False
+        return self._has_reference(words) or any(w in PRONOUNS for w in words)
 
     def _has_reference(self, words: list[str]) -> bool:
         """¿Hay un pronombre ("eso", "la misma") o un verbo con pronombre pegado ("ciérralo", "ábrelo")?"""

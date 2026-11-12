@@ -345,6 +345,13 @@ def resolve_target(target: Target, page: str, values: dict[str, str]) -> str | N
     return None
 
 
+def role_present(target: Target, page: str) -> bool:
+    """¿Hay en la página algún elemento del rol (y forma de enlace) que se busca? Si no hay ninguno, lo normal es que la
+    página aún no haya terminado de cargar, no que la receta esté mal."""
+    roles = _CLICKABLE if target.role in _CLICKABLE else {target.role}
+    return any(i.role in roles for i in parse_page(page))
+
+
 def describe_target(target: Target, values: dict[str, str]) -> str:
     """Cómo se le dice al usuario qué elemento se buscaba: link «ir al canal Lofi Girl», link n.º 1 (/watch)."""
     if target.ordinal:

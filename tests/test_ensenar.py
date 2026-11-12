@@ -146,7 +146,9 @@ async def test_si_la_receta_falla_dice_en_que_paso_y_el_planificador_sigue_desde
     notas: list[str] = []
     llm = FakeLLM(*guion_hrom(), decir("No encuentro ese canal en los resultados."))
     async with Client(pc.server()) as client:
-        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append)
+        agent = Agent(
+            llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append, page_wait=0.04
+        )
         await ensenar(agent)
         resultado = await agent.run("dame el vídeo más visto del canal Nadie")
     nota = "receta n.º 1 → falló en paso 2/5: no encontré link «ir al canal Nadie»; sigo con el planificador"
@@ -185,3 +187,33 @@ async def test_la_frase_de_la_receta_no_se_comprueba_como_un_nombre_de_la_pagina
         await ensenar(agent)
         resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
     assert resultado.answer.startswith("Hecho como me enseñaste") and "Aviso" not in resultado.answer
+
+
+async def test_si_la_lista_tarda_en_pintarse_se_espera_y_se_reintenta_sin_fallar() -> None:
+    """Caso real (aula): Lofi Girl falló una vez en el paso 2 y a la segunda fue bien: la lista aún no estaba."""
+    pc, store = FakePC(), RecipeStore(":memory:")
+    async with Client(pc.server()) as client:
+        agent = Agent(
+            FakeLLM(*guion_hrom()), McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, page_wait=0.04
+        )
+        await ensenar(agent)
+        pc.site.slow_reads = 2  # la búsqueda y el primer vistazo ven la página vacía
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert resultado.metrics.route == "receta" and resultado.answer.startswith("Hecho como me enseñaste")
+    assert [s.tool for s in resultado.steps].count("browser.snapshot") == 2
+    assert store.all()[0].failures == 0
+
+
+async def test_si_la_pagina_no_llega_a_cargar_no_cuenta_como_fallo_de_la_receta() -> None:
+    pc, store = FakePC(), RecipeStore(":memory:")
+    llm = FakeLLM(*guion_hrom(), decir("La página no ha cargado."))
+    notas: list[str] = []
+    async with Client(pc.server()) as client:
+        agent = Agent(
+            llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append, page_wait=0.04
+        )
+        await ensenar(agent)
+        pc.site.slow_reads = 99
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert "la página no terminó de cargar" in resultado.metrics.recipe_note
+    assert store.all()[0].failures == 0 and store.all()[0].enabled

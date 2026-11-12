@@ -114,6 +114,8 @@ class VideoSite:
     # Cómo enlaza cada canal la página de resultados (como YouTube, que no siempre lo escribe igual):
     # "plano" → «Hrom»; "ir" → «Ir al canal Hrom»; "handle" → «@LofiGirl · 1,5 M de suscriptores».
     layouts: dict[str, str] = field(default_factory=lambda: {"hrom": "ir", "lofigirl": "handle"})
+    # Lecturas de la página de resultados que aún salen vacías (YouTube pinta la lista después de cargar)
+    slow_reads: int = 0
     _links: dict[str, _Link] = field(default_factory=dict)
 
     @staticmethod
@@ -198,6 +200,9 @@ class VideoSite:
         return self.url, self.title
 
     async def aria(self) -> str:
+        if self.slow_reads > 0 and urlsplit(self.url).path == "/results":
+            self.slow_reads -= 1
+            return '- main:\n  - searchbox "Buscar" [ref=e1] [cursor=pointer]:'
         return self._render()
 
     async def click(self, ref: str) -> None:

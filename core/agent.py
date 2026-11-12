@@ -33,6 +33,7 @@ from core.recipes import (
     fill_args,
     passes,
     resolve_target,
+    role_present,
     tokenize,
 )
 from core.router import Router
@@ -737,6 +738,11 @@ def _step_hint(step: RecipeStep, values: dict[str, str]) -> str:
     return f"{_label(step.tool)} ({args})"
 
 
+# Al reproducir una receta en el navegador: cada cuánto se vuelve a mirar la página y cuánto se espera como mucho.
+PAGE_WAIT_SECONDS = 4.0
+PAGE_RETRIES = 4
+
+
 # Herramientas cuyo éxito ya demuestra que se hizo (no devuelven lanzada/cerrada/verificado ni cambio de página).
 UNCHECKED_DONE = frozenset({"web.site_search", "web.open", "uri.open", "media.key"})
 ALIASED_TOOLS = frozenset({"apps.open", "apps.close"})
@@ -775,9 +781,11 @@ class Agent:
         recipes: RecipeStore | None = None,
         recipe_config: RecipeConfig | None = None,
         on_note: Callable[[str], None] | None = None,
+        page_wait: float = PAGE_WAIT_SECONDS,
     ) -> None:
         self._llm = llm
         self._on_note = on_note  # avisos en el momento (p. ej. "la receta n.º 4 falló en el paso 2")
+        self._page_wait = page_wait  # cuánto se espera a que una página cargue antes de dar un paso por fallido
         self._backend = backend
         self._policy = policy or ConfirmationPolicy.load()
         self._intent = intent or IntentGate.load()
@@ -803,6 +811,8 @@ class Agent:
         self._teaching: tuple[str, list[Recorded]] | None = None  # /aprender: frase y pasos grabados
         self._teaching_failed: list[str] = []  # frases guiadas en las que algo falló
         self._choice: tuple[PendingChoice, Option] | None = None  # la opción que acaba de elegir el usuario
+        if recipes is not None:
+            self._drop_reference_recipes()
         self._model_corrected = False  # _grounded tuvo que corregir la respuesta del modelo en este turno
         self._request = ""  # el mensaje del usuario en este turno (la petición original si responde a una lista)
 
@@ -1128,8 +1138,22 @@ class Agent:
                     seen = await self._run_step(ToolCall(to_wire["browser.snapshot"], {}), to_mcp, result, original)
                     page = str((_json_dict(seen.result) or {}).get("pagina") or "")
                 ref = resolve_target(rstep.target, page or "", values)
+                waited = 0.0
+                while ref is None and "browser.snapshot" in to_wire and waited < self._page_wait:
+                    # La página puede no haber terminado de pintar la lista (YouTube carga los resultados después):
+                    # se espera un poco, se vuelve a mirar y se reintenta, antes de dar el paso por fallido.
+                    await asyncio.sleep(self._page_wait / PAGE_RETRIES)
+                    waited += self._page_wait / PAGE_RETRIES
+                    seen = await self._run_step(ToolCall(to_wire["browser.snapshot"], {}), to_mcp, result, original)
+                    page = str((_json_dict(seen.result) or {}).get("pagina") or "")
+                    ref = resolve_target(rstep.target, page, values)
                 if ref is None:
-                    return self._replay_failed(fail, f"no encontré {describe_target(rstep.target, values)}")
+                    wanted = describe_target(rstep.target, values)
+                    if not role_present(rstep.target, page or ""):  # la página no cargó: no es culpa de la receta
+                        return self._replay_failed(
+                            fail, f"la página no terminó de cargar (no salía {wanted})", count=False
+                        )
+                    return self._replay_failed(fail, f"no encontré {wanted}")
                 args = {"ref": ref, **args}
             step = await self._run_step(ToolCall(to_wire[rstep.tool], args), to_mcp, result, original)
             if step.result.startswith("DENEGADO"):
@@ -1169,11 +1193,12 @@ class Agent:
         self._finish(result, answer, to_mcp, cites=False)  # la frase de la receta no es un nombre de la página
         return True
 
-    def _replay_failed(self, fail: _ReplayFailure, reason: str) -> bool:
-        """Suma el fallo, lo dice (CLI y métricas) y deja al planificador una pista: lo que faltaba de la receta."""
+    def _replay_failed(self, fail: _ReplayFailure, reason: str, *, count: bool = True) -> bool:
+        """Suma el fallo (salvo si la culpa no es de la receta: la página no cargó), lo dice (CLI y métricas) y deja al
+        planificador una pista: lo que faltaba de la receta."""
         recipe = fail.recipe
         assert self._recipes is not None and recipe.id is not None
-        disabled = self._recipes.failure(recipe.id, self._recipe_config.max_streak)
+        disabled = self._recipes.failure(recipe.id, self._recipe_config.max_streak) if count else False
         total = len(recipe.steps)
         note = f"receta n.º {recipe.id} → falló en paso {fail.n}/{total}: {reason}; sigo con el planificador desde la página actual"
         if disabled:
@@ -1197,6 +1222,8 @@ class Agent:
         """Tras un turno del planificador: si se está enseñando, se graba; si salió bien entero, queda como candidata."""
         if self._recipes is None:
             return
+        if self._intent.refers_only(request):
+            return  # «ciérralo»: lo que hizo depende de la conversación, la frase sola no dice qué
         if self._teaching is not None:
             self._teaching[1].extend(
                 Recorded(s.tool, s.arguments, s.result, request, s.asked) for s in result.steps if s.ok
@@ -1219,6 +1246,14 @@ class Agent:
             return  # lo último no demuestra que se completó
         recorded = [Recorded(s.tool, s.arguments, s.result, request) for s in steps]
         self._candidate = build_recipe(request, recorded, self._intent.verb_root, self._recipe_config)
+
+    def _drop_reference_recipes(self) -> None:
+        """Limpieza al arrancar: recetas sin huecos aprendidas de un pronombre («<cierr*>» de «ciérralo») cerrarían
+        siempre la misma app con cualquier «ciérralo». Se borran."""
+        assert self._recipes is not None
+        for recipe in self._recipes.all():
+            if recipe.id is not None and not recipe.slots and self._intent.refers_only(recipe.example):
+                self._recipes.delete(recipe.id)
 
     def flush(self) -> None:
         """Al salir: la receta candidata del último turno se guarda (nadie la ha corregido)."""
