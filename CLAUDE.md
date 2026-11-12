@@ -41,27 +41,46 @@ Reglas:
 
 ## Arquitectura
 
+Objetivo, pensado para CPU. Hoy existen el router N0, el planificador, la puerta, las recetas, el pánico, `hands-mcp` (apps, web, navegador, cierres, multimedia) y Ollama nativo; el resto llega con las fases de la hoja de ruta.
+
 ```
-                 VOZ                          TEXTO
-   micro → wake word / push-to-talk     panel overlay (Ctrl+Alt+D) · Telegram
-            → STT (faster-whisper)                 │
-                       └───────────────┬───────────┘
-                                       ▼
-                        diogenes-core (Python, anfitrión Windows)
-                        ├─ router: atajo rápido │ receta conocida │ planificador LLM
-                        ├─ bucle agente: planificar → actuar → verificar (máx. N pasos)
-                        ├─ memoria + recetas (SQLite)
-                        └─ TTS (Piper) para responder en voz
-                                       │ MCP (HTTP, 127.0.0.1 + token)
-                 ┌─────────────────────┼─────────────────────┐
-                 ▼                     ▼                     ▼
-          hands-mcp (anfitrión)   tools-mcp (Docker)     ollama (Docker)
-          apps, web, UI, pantalla Gmail, Calendar,       qwen3:4b-instruct
-          sistema, multimedia     tareas, casa-sim       (texto)         
+  VOZ (hilo de audio en core)            TEXTO / REMOTO                    OBSERVADORES
+  micro → VAD → PTT / wake word     consola · overlay (Ctrl+Alt+D)    Husk: hooks de Claude Code,
+        → STT (proceso aparte)      Telegram (bot propio, saliente)     Codex, OpenCode → POST local
+                │                              │                                  │
+                └──────────────┬───────────────┴──────────────────────────────────┘
+                               ▼
+ ┌───────────────────────── diogenes-core (asyncio, anfitrión) ─────────────────────────────┐
+ │  N0 router sin LLM: atajos · elección · alias · recetas · recordatorios     (< 300 ms)   │
+ │  N1 clasificador sin LLM: reglas + rapidfuzz (+ model2vec si hace falta)    (< 50 ms)    │
+ │     ├─ charla ─────────► N2 personaje: prompt corto, sin herramientas, ≤ 25 palabras     │
+ │     └─ acción ─────────► N3 planificador: prompt compacto, herramientas en orden fijo    │
+ │  Trabajos: cola, panel de pasos, interrumpir, /parar, Ctrl+Alt+Esc, aviso si nada cambia │
+ │  Puerta: IntentGate + interruptores/presets + confirmaciones.json + _grounded            │
+ │  Memoria · notas .md · recetas · uso · alias (SQLite) · personalidad.md + capas fijas    │
+ │  Bus de eventos ─► estado (escuchando, pensando, acción, ⚠, error, hecho)                │
+ │  LLMProvider: Ollama local │ OpenAICompat en la nube (solo personal, opcional)           │
+ └───────┬───────────────────────┬──────────────────────────┬──────────────────┬────────────┘
+         │ MCP HTTP 127.0.0.1    │ eventos (WebSocket       │ TTS Piper        │ MCP (stdio)
+         │ + token               │ 127.0.0.1 + token)       │ en streaming     │ manifiesto aprobado
+         ▼                       ▼                          ▼                  ▼
+ hands-mcp (anfitrión)      overlay (proceso PySide6)    altavoz        plugins MCP
+ apps · uri · web ·         sprites propios, bandeja,                   (sus herramientas
+ browser (CDP) ·            mini reproductor, ⚠ junto                   preguntan por
+ ventanas · sistema ·       al ratón                                    defecto)
+ OCR · UIA · ratón ·
+ captura + diff (watch_for)
+         │
+ Ollama nativo 127.0.0.1:11434 (num_thread 6, num_ctx 4096, precargado al arrancar)
 ```
 
+- **El overlay es otro proceso**: Qt no bloquea el bucle del agente ni al revés; si se cae, Diogenes sigue. Recibe eventos de estado por un WebSocket local con token.
+- **El STT corre en un proceso aparte** y se carga al arrancar; el personaje reacciona (animación y frase pregrabada) en cuanto llega la orden, aunque el modelo tarde.
+- **`watch_for` y el OCR viven en `hands-mcp`** (necesitan el escritorio): la vigilancia compara capturas reducidas y lee con OCR; la condición se evalúa en código y el modelo no se llama en cada vistazo.
+- **Husk y Telegram solo hablan con core**: todo pasa por la misma puerta y las mismas confirmaciones. Husk solo observa y avisa.
+- **Plugins por MCP en proceso aparte**, con manifiesto de permisos y hash aprobado; nunca código cargado dentro de core.
 - `hands-mcp` corre **fuera de Docker** porque necesita el escritorio de Windows. Escucha solo en `127.0.0.1` y exige un token compartido.
-- `diogenes-core` es el cliente MCP principal. n8n (del stack de clase) usa solo `tools-mcp`.
+- `diogenes-core` es el cliente MCP principal. n8n (del stack de clase) usa solo `tools-mcp`, que el modo personal puede usar como un MCP más.
 - El proveedor del LLM se abstrae tras una interfaz `LLMProvider` (Ollama por defecto; cualquier servidor compatible con OpenAI como opción). El stack de clase solo admite Ollama local.
 
 ## Cómo resuelve una petición
