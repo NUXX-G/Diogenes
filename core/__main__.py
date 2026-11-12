@@ -18,6 +18,7 @@ from core.hotkey import HotkeyListener, load_combo
 from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaProvider
 from core.mcp_client import connect_hands
 from core.metrics import MetricsLog
+from core.recipes import RecipeStore
 from core.session import Session
 from core.toolsets import ToolSelector
 
@@ -64,6 +65,7 @@ async def amain() -> int:
     async def read() -> str:
         return await asyncio.to_thread(input, "> ")
 
+    recipes = RecipeStore(Path(os.environ.get("DIOGENES_DB_PATH", "data/diogenes.db")))
     async with AsyncExitStack() as stack:
         try:
             tools = await connect_hands(stack, url, token)
@@ -87,11 +89,15 @@ async def amain() -> int:
             confirm=session.confirm,
             on_step=lambda s: print(format_step(s)),
             toolset=ToolSelector.load(os.environ.get("DIOGENES_HERRAMIENTAS", "todas")),
+            recipes=recipes,
         )
         loop = asyncio.get_running_loop()
         combo = load_combo()
         hotkey = HotkeyListener(combo, lambda: loop.call_soon_threadsafe(session.panic))
         print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar o '/nuevo' para olvidar la conversación.")
+        print(
+            "Recetas: /aprender <frase> · /fin · /cancelar · /recetas · /receta borrar <n.º> · /alias · /alias borrar <x>"
+        )
         if hotkey.start():
             print(f"Botón del pánico: {combo} o /parar (también /para).")
         else:

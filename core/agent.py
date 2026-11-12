@@ -15,11 +15,24 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-from core.choices import PendingChoice, ask_again, is_affirmation, parse_options, resolve
+from core.choices import Option, PendingChoice, ask_again, is_affirmation, parse_options, resolve
 from core.intent import IntentGate
 from core.llm.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
 from core.mcp_client import ToolBackend
 from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
+from core.recipes import (
+    Recipe,
+    RecipeConfig,
+    RecipeStore,
+    Recorded,
+    alias_key,
+    build_recipe,
+    checks_for,
+    fill_args,
+    passes,
+    resolve_target,
+    tokenize,
+)
 from core.router import Router
 from core.safety import Confirm, ConfirmationPolicy
 from core.toolsets import ToolSelector
@@ -107,6 +120,7 @@ class Step:
     arguments: dict[str, Any]
     result: str
     ok: bool
+    asked: bool = False  # hubo que preguntar al usuario (propuesto por el modelo, irreversible, ejecutable...)
 
 
 @dataclass
@@ -587,6 +601,21 @@ def _options_question(subject: str, options: list[dict[str, Any]]) -> str:
     return f"Hay varias opciones para «{subject}»:\n{lines}\n¿Cuál quieres?"
 
 
+# Herramientas cuyo éxito ya demuestra que se hizo (no devuelven lanzada/cerrada/verificado ni cambio de página).
+UNCHECKED_DONE = frozenset({"web.site_search", "web.open", "uri.open", "media.key"})
+ALIASED_TOOLS = frozenset({"apps.open", "apps.close"})
+
+
+def _list_recipes(recipes: list[Recipe]) -> str:
+    if not recipes:
+        return "No hay recetas aprendidas."
+    lines = []
+    for r in recipes:
+        state = "" if r.enabled else " · DESACTIVADA"
+        lines.append(f"{r.id}. «{r.trigger}» ({r.origin}) ✓{r.successes} ✗{r.failures}{state} · ej.: {r.example}")
+    return "\n".join(lines)
+
+
 def _size(message: Message) -> int:
     return len(message.content) + sum(len(json.dumps(c.arguments)) + len(c.name) for c in message.tool_calls)
 
@@ -607,6 +636,8 @@ class Agent:
         max_turns: int = MAX_HISTORY_TURNS,
         max_chars: int = MAX_HISTORY_CHARS,
         on_step: Callable[[Step], None] | None = None,
+        recipes: RecipeStore | None = None,
+        recipe_config: RecipeConfig | None = None,
     ) -> None:
         self._llm = llm
         self._backend = backend
@@ -625,12 +656,25 @@ class Agent:
         self._last_user = ""  # lo que el usuario pidió en el turno anterior
         self._last_answer = ""  # y lo que el agente contestó (para un "sí" a su pregunta)
         self._turn = TurnMetrics()  # tiempos del turno en curso
+        # Aprendizaje (sin almacén no se aprende ni se reproduce nada)
+        self._recipes = recipes
+        self._recipe_config = recipe_config or RecipeConfig.load()
+        self._candidate: Recipe | None = None  # se guarda si el siguiente mensaje no corrige
+        self._last_recipe: int | None = None  # receta reproducida en el turno anterior
+        self._used_alias: str | None = None  # alias usado en el turno anterior
+        self._teaching: tuple[str, list[Recorded]] | None = None  # /aprender: frase y pasos grabados
+        self._choice: tuple[PendingChoice, Option] | None = None  # la opción que acaba de elegir el usuario
+        self._model_corrected = False  # _grounded tuvo que corregir la respuesta del modelo en este turno
 
     def reset(self) -> None:
         self._history.clear()
         self._pending = None
         self._last_user = self._last_answer = ""
         self._intent.reset()
+        self._candidate = None
+        self._last_recipe = None
+        self._used_alias = None
+        self._teaching = None
 
     @property
     def history(self) -> tuple[Message, ...]:
@@ -674,6 +718,7 @@ class Agent:
 
     async def _run(self, request: str, started: float) -> AgentResult:
         specs, to_mcp = _wire_names(await self._backend.tools())
+        self._settle(request)
 
         if self._pending is None and (answer := await self._shortcut(request, to_mcp, started)) is not None:
             self._turn.route = "atajo"
@@ -688,16 +733,28 @@ class Agent:
             return AgentResult(answer, seconds=time.monotonic() - started)
 
         original, text = self._apply_pending_choice(request)
-        self._intent.begin_turn(self._mandate(request, text))
+        hit = self._find_recipe(request) if text == request else None
+        grant = self._grants(*hit) if hit else ""
+        self._intent.begin_turn(self._mandate(request, text) + grant)
         self._last_user = text
         self._trim()
         turn_start = len(self._history)
         self._history.append(Message("user", text))
         result = AgentResult("")
+        self._model_corrected = False
         target = self._intent.action_target(request) if text == request else None
-        shown = self._selector.select(specs, to_mcp, original, in_web=self._intent.in_web, everything=text != request)
+        shown = self._selector.select(
+            specs, to_mcp, original, in_web=self._intent.in_web, everything=text != request or self.teaching
+        )
         try:
-            await self._loop(shown, to_mcp, result, started, original, target)
+            done = False
+            if self._choice is not None:
+                done = await self._apply_choice(to_mcp, result, original)
+            elif hit is not None:
+                done = await self._replay(hit[0], hit[1], to_mcp, result, original)
+            if not done:
+                await self._loop(shown, to_mcp, result, started, original, target)
+                self._learn(request, text, result)
         except asyncio.CancelledError:
             del self._history[turn_start:]
             self._pending = None  # tras el pánico, un "sí" o "el segundo" no puede reanudar lo cancelado
@@ -737,11 +794,13 @@ class Agent:
     def _apply_pending_choice(self, request: str) -> tuple[str, str]:
         """Si el usuario responde a una lista de opciones, se resuelve aquí (en código) y se le dice al modelo."""
         pending, self._pending = self._pending, None
+        self._choice = None
         if pending is None:
             return request, request
         choice = resolve(request, pending.options)
         if choice is None:
             return request, request
+        self._choice = (pending, choice)
         text = (
             f"{pending.request}\n[El usuario ha elegido la opción {choice.n}: «{choice.nombre}» "
             f"(id: {choice.id}). Úsala sin volver a buscar ni preguntar.]"
@@ -773,22 +832,14 @@ class Agent:
                 calls = (forced,)
                 self._history.append(Message("assistant", "", calls))
             else:
-                answer = _grounded(response.content.strip(), result.steps)
+                said = response.content.strip()
+                answer = _grounded(said, result.steps)
+                self._model_corrected = answer != said
                 result.answer = _without_tool_names(answer, tool_names)
                 self._history.append(Message("assistant", result.answer))
                 return
             for call in calls:
-                step = await self._execute(call, to_mcp)
-                result.steps.append(step)
-                if self._on_step:
-                    self._on_step(step)
-                shown = _clip(_present(step.result))
-                if PAGE_MARKER in shown:
-                    self._drop_old_pages()
-                self._history.append(Message("tool", shown, tool_name=call.name))
-                options = parse_options(step.result)
-                if options:
-                    self._pending = PendingChoice(original, options)
+                step = await self._run_step(call, to_mcp, result, original, announce=False)
                 stop = _stop_message(step.result)
                 if stop:  # contraseña o pago: se corta el bucle en código, sin dejar que el modelo busque otro camino
                     result.answer = stop
@@ -806,6 +857,238 @@ class Agent:
             f"No he podido terminar en el límite de pasos o de tiempo. Lo que intenté: {_resumen(result.steps)}."
         )
         self._history.append(Message("assistant", result.answer))
+
+    async def _run_step(
+        self, call: ToolCall, to_mcp: dict[str, str], result: AgentResult, original: str, *, announce: bool = True
+    ) -> Step:
+        """Ejecuta una llamada y la deja en el historial como si la hubiera pedido el modelo (así el contexto es el mismo
+        venga del modelo, de una receta o de una elección resuelta en código)."""
+        if announce:
+            self._history.append(Message("assistant", "", (call,)))
+        step = await self._execute(call, to_mcp)
+        result.steps.append(step)
+        if self._on_step:
+            self._on_step(step)
+        shown = _clip(_present(step.result))
+        if PAGE_MARKER in shown:
+            self._drop_old_pages()
+        self._history.append(Message("tool", shown, tool_name=call.name))
+        options = parse_options(step.result)
+        if options:
+            query = str(step.arguments.get("nombre") or step.arguments.get("id") or "")
+            self._pending = PendingChoice(original, options, step.tool, query)
+        return step
+
+    def _finish(self, result: AgentResult, answer: str, to_mcp: dict[str, str], *, template: bool = True) -> None:
+        tool_names = set(to_mcp) | set(to_mcp.values())
+        result.answer = _without_tool_names(_grounded(answer, result.steps), tool_names)
+        self._turn.answer_by_template = template
+        self._history.append(Message("assistant", result.answer))
+
+    # --- elegir una opción sin el modelo ------------------------------------------------------------------------------
+
+    async def _apply_choice(self, to_mcp: dict[str, str], result: AgentResult, original: str) -> bool:
+        """ "El segundo" tras una lista de apps: se abre (o se cierra) esa en código, sin preguntar al modelo, y lo que se
+        buscó pasa a ser un alias de la app elegida. Devuelve False si no es una lista de apps (decide el modelo)."""
+        assert self._choice is not None
+        pending, choice = self._choice
+        if pending.tool not in ("apps.open", "apps.search", "apps.close"):
+            return False
+        closing = pending.tool == "apps.close" or self._intent.only_closing()
+        tool = "apps.close" if closing else "apps.launch"
+        wire = next((w for w, m in to_mcp.items() if m == tool), None)
+        if wire is None:
+            return False
+        self._turn.route = "eleccion"
+        step = await self._run_step(ToolCall(wire, {"id": choice.id}), to_mcp, result, original)
+        data = _json_dict(step.result) or {}
+        if step.result.startswith("DENEGADO"):
+            self._finish(result, "No lo he hecho: no lo has confirmado.", to_mcp)
+            return True
+        done = data.get("cerrada") is True if closing else data.get("ok") is True
+        if not done:
+            return False  # que el modelo explique lo que haya pasado (no está abierta, pide confirmación...)
+        if self._recipes is not None and pending.query and alias_key(pending.query) != alias_key(choice.nombre):
+            self._recipes.save_alias(pending.query, choice.id, choice.nombre)
+            self._used_alias = pending.query
+        answer = (
+            str(data.get("mensaje") or f"He cerrado {choice.nombre}.") if closing else f"He abierto {choice.nombre}."
+        )
+        self._finish(result, answer, to_mcp)
+        return True
+
+    # --- recetas ------------------------------------------------------------------------------------------------------
+
+    @property
+    def teaching(self) -> bool:
+        return self._teaching is not None
+
+    def _settle(self, request: str) -> None:
+        """Con el mensaje siguiente se sabe si lo anterior salió bien: si no lo corrige, la receta candidata se guarda;
+        si lo corrige, la receta o el alias usados suman un fallo."""
+        if self._recipes is None:
+            return
+        corrected = self._recipe_config.is_correction(request)
+        if self._candidate is not None and not corrected:
+            self._recipes.save(self._candidate)
+        if corrected and self._last_recipe is not None:
+            self._recipes.failure(self._last_recipe, self._recipe_config.max_streak)
+        if corrected and self._used_alias is not None:
+            self._recipes.alias_failure(self._used_alias, self._recipe_config.alias_failures)
+        self._candidate, self._last_recipe, self._used_alias = None, None, None
+
+    def _find_recipe(self, request: str) -> tuple[Recipe, dict[str, str]] | None:
+        if self._recipes is None or self.teaching:
+            return None
+        tokens, words = tokenize(request, self._intent.verb_root, self._recipe_config.filler)
+        return self._recipes.find(tokens, words)
+
+    @staticmethod
+    def _grants(recipe: Recipe, values: dict[str, str]) -> str:
+        """Los destinos fijos de la receta (la web, la app) cuentan como pedidos SOLO porque el mensaje encaja con su
+        disparador. Los pasos que hubo que confirmar al aprenderla no se conceden: se vuelven a preguntar."""
+        granted = []
+        for step in recipe.steps:
+            if step.asked:
+                continue
+            args = fill_args(step.args, values)
+            granted += [str(args[k]) for k in ("nombre", "id", "sitio", "url") if args.get(k)]
+        return "\n" + " ".join(granted) if granted else ""
+
+    async def _replay(
+        self, recipe: Recipe, values: dict[str, str], to_mcp: dict[str, str], result: AgentResult, original: str
+    ) -> bool:
+        """Repite la receta paso a paso con las mismas comprobaciones. Si un paso no sale como la primera vez, para,
+        suma un fallo y deja seguir al planificador con lo ya hecho en el historial. Devuelve True si el turno acabó."""
+        assert recipe.id is not None
+        to_wire = {mcp: wire for wire, mcp in to_mcp.items()}
+        self._turn.route = "receta"
+        page: str | None = None
+        for rstep in recipe.steps:
+            if rstep.tool not in to_wire:
+                return self._replay_failed(recipe)
+            args = fill_args(rstep.args, values)
+            if rstep.target is not None:
+                if page is None and "browser.snapshot" in to_wire:
+                    seen = await self._run_step(ToolCall(to_wire["browser.snapshot"], {}), to_mcp, result, original)
+                    page = str((_json_dict(seen.result) or {}).get("pagina") or "")
+                ref = resolve_target(rstep.target, page or "", values)
+                if ref is None:
+                    return self._replay_failed(recipe)
+                args = {"ref": ref, **args}
+            step = await self._run_step(ToolCall(to_wire[rstep.tool], args), to_mcp, result, original)
+            if step.result.startswith("DENEGADO"):
+                self._finish(result, "No lo he hecho: no lo has confirmado.", to_mcp)
+                return True
+            if (stop := _stop_message(step.result)) is not None:
+                self._finish(result, stop, to_mcp)
+                return True
+            data = _json_dict(step.result) or {}
+            if rstep.tool == "apps.open" and data.get("ok") is True and data.get("lanzada") is not True:
+                self._turn.route = "planificador"  # no hay una app con ese nombre: no es culpa de la receta
+                return False
+            if not passes(rstep, step.result):
+                return self._replay_failed(recipe)
+            page = data["pagina"] if isinstance(data.get("pagina"), str) else None
+        self._recipes.success(recipe.id)  # type: ignore[union-attr]
+        self._last_recipe = recipe.id
+        answer = self._template_answer(original, result.steps)
+        if answer is None:
+            last = next((d for d in reversed(_page_dicts(result.steps)) if d.get("url")), None)
+            where = f" Estoy en «{last.get('titulo', '')}» ({last['url']})." if last else ""
+            answer = f"Hecho como me enseñaste («{recipe.example}»).{where}"
+        self._finish(result, answer, to_mcp)
+        return True
+
+    def _replay_failed(self, recipe: Recipe) -> bool:
+        assert self._recipes is not None and recipe.id is not None
+        self._recipes.failure(recipe.id, self._recipe_config.max_streak)
+        self._turn.route = "planificador"  # sigue el modelo con lo ya hecho a la vista
+        return False
+
+    def _learn(self, request: str, text: str, result: AgentResult) -> None:
+        """Tras un turno del planificador: si se está enseñando, se graba; si salió bien entero, queda como candidata."""
+        if self._recipes is None:
+            return
+        if self._teaching is not None:
+            self._teaching[1].extend(
+                Recorded(s.tool, s.arguments, s.result, request, s.asked) for s in result.steps if s.ok
+            )
+            return
+        steps = result.steps
+        if text != request or not result.finished or self._model_corrected or not steps:
+            return
+        if any(not s.ok or s.asked for s in steps):
+            return  # algo falló, o hubo que preguntar: nada que el usuario haya pedido entero
+        actions = [s for s in steps if s.tool not in self._recipe_config.read_only]
+        if not actions:
+            return
+        last = actions[-1]
+        if not (checks_for(last.tool, last.result) or last.tool in UNCHECKED_DONE):
+            return  # lo último no demuestra que se completó
+        recorded = [Recorded(s.tool, s.arguments, s.result, request) for s in steps]
+        self._candidate = build_recipe(request, recorded, self._intent.verb_root, self._recipe_config)
+
+    def start_teaching(self, phrase: str) -> str:
+        if self._recipes is None:
+            return "No puedo aprender: no hay base de recetas."
+        phrase = phrase.strip()
+        if not phrase:
+            return "Dime la frase: /aprender dame el vídeo más visto del canal Hrom"
+        self._teaching = (phrase, [])
+        return (
+            f"Grabando «{phrase}». Guíame paso a paso con frases normales; /fin para guardarlo como receta, "
+            "/cancelar para descartarlo."
+        )
+
+    def finish_teaching(self) -> str:
+        if self._teaching is None or self._recipes is None:
+            return "No estaba aprendiendo nada. Empieza con /aprender <frase>."
+        phrase, recorded = self._teaching
+        self._teaching = None
+        recipe = build_recipe(phrase, recorded, self._intent.verb_root, self._recipe_config, origin="enseñada")
+        if recipe is None:
+            return "No he guardado nada: no hubo ningún paso que se pueda repetir."
+        recipe_id = self._recipes.save(recipe)
+        steps = "; ".join(s.describe() for s in recipe.steps)
+        return f"Aprendida la receta n.º {recipe_id}: «{recipe.trigger}» → {steps}"
+
+    def cancel_teaching(self) -> str:
+        if self._teaching is None:
+            return "No estaba aprendiendo nada."
+        self._teaching = None
+        return "Descartado: no he guardado nada."
+
+    def command(self, line: str) -> str | None:
+        """Comandos de recetas y alias. None si la línea no es uno de ellos."""
+        parts = line.strip().split(maxsplit=2)
+        if not parts or not parts[0].startswith("/"):
+            return None
+        name, rest = parts[0].lower(), parts[1:]
+        if name == "/aprender":
+            return self.start_teaching(line.strip()[len(parts[0]) :])
+        if name == "/fin":
+            return self.finish_teaching()
+        if name == "/cancelar":
+            return self.cancel_teaching()
+        if self._recipes is None:
+            return "No hay base de recetas." if name in ("/recetas", "/receta", "/alias") else None
+        if name == "/recetas":
+            return _list_recipes(self._recipes.all())
+        if name == "/receta" and len(rest) == 2 and rest[0].lower() == "borrar" and rest[1].isdigit():
+            ok = self._recipes.delete(int(rest[1]))
+            return f"Receta n.º {rest[1]} borrada." if ok else f"No hay ninguna receta n.º {rest[1]}."
+        if name == "/alias" and not rest:
+            aliases = self._recipes.aliases()
+            if not aliases:
+                return "No hay alias aprendidos."
+            return "\n".join(f"«{a.alias}» → {a.app_name} (✓{a.successes} ✗{a.failures})" for a in aliases)
+        if name == "/alias" and len(rest) == 2 and rest[0].lower() == "borrar":
+            gone = self._recipes.delete_alias(rest[1])
+            return f"Alias «{rest[1]}» olvidado." if gone else f"No hay ningún alias «{rest[1]}»."
+        if name in ("/receta", "/alias"):
+            return "Uso: /recetas · /receta borrar <n.º> · /alias · /alias borrar <nombre>"
+        return None
 
     def _template_answer(self, request: str, steps: list[Step]) -> str | None:
         """La respuesta final sin modelo cuando el turno fue UNA acción que el usuario pidió entera y que la herramienta
@@ -873,10 +1156,42 @@ class Agent:
             starts = [i for i, m in enumerate(self._history) if m.role == "user"]
             del self._history[: starts[1] if len(starts) > 1 else len(self._history)]
 
-    async def _execute(self, call: ToolCall, to_mcp: dict[str, str]) -> Step:
+    async def _via_alias(self, name: str, call: ToolCall, to_mcp: dict[str, str]) -> Step | None:
+        """«abre el editor» cuando el usuario ya eligió una vez qué es «el editor»: directo a esa app, sin buscar."""
+        if self._recipes is None or name not in ALIASED_TOOLS:
+            return None
+        said = str(call.arguments.get("nombre") or call.arguments.get("id") or "")
+        alias = self._recipes.alias(said) if said else None
+        if alias is None or not self._intent.grant_alias(said, alias.app_id, alias.app_name):
+            return None
+        tool = "apps.launch" if name == "apps.open" else name
+        wire = next((w for w, m in to_mcp.items() if m == tool), None)
+        if wire is None:
+            return None
+        step = await self._execute(ToolCall(wire, {"id": alias.app_id}), to_mcp, aliased=True)
+        data = _json_dict(step.result) or {}
+        if "id desconocido" in str(data.get("mensaje", "")):  # la app ya no existe: el alias no sirve
+            self._recipes.delete_alias(said)
+            return None
+        self._used_alias = said
+        if name == "apps.open" and step.ok and data.get("ok") is True:
+            shown = {
+                "ok": True,
+                "lanzada": True,
+                "id": alias.app_id,
+                "nombre": alias.app_name,
+                "mensaje": f"Lanzado {alias.app_name} (lo llamas «{alias.alias}»)",
+            }
+            return Step(name, dict(call.arguments), json.dumps(shown, ensure_ascii=False), True, step.asked)
+        return Step(name, dict(call.arguments), step.result, step.ok, step.asked)
+
+    async def _execute(self, call: ToolCall, to_mcp: dict[str, str], *, aliased: bool = False) -> Step:
         name = to_mcp.get(call.name)
         if name is None:
             return Step(call.name, call.arguments, f"ERROR: la herramienta '{call.name}' no existe", False)
+        if not aliased and (via_alias := await self._via_alias(name, call, to_mcp)) is not None:
+            return via_alias
+        asked = False
         verdict = self._intent.check(name, call.arguments)
         if verdict.blocked:
             blocked = {
@@ -904,7 +1219,8 @@ class Agent:
                 shown["destino"] = verdict.target
                 shown["motivo"] = "; ".join(reasons.values())
             if not await self._policy.approve(name, shown, self._confirm):
-                return Step(name, call.arguments, "DENEGADO: el usuario no ha confirmado esta acción", False)
+                return Step(name, call.arguments, "DENEGADO: el usuario no ha confirmado esta acción", False, True)
+            asked = True
         arguments = {k: v for k, v in call.arguments.items() if k not in CODE_ONLY_ARGS}
         sent = {**arguments, USER_NAMED_FLAG: verdict.allowed} if decided_by_tool else arguments
         try:
@@ -916,10 +1232,11 @@ class Agent:
                 if not already_allowed and not await self._policy.approve(
                     name, {**arguments, **pending}, self._confirm
                 ):
-                    return Step(name, arguments, "DENEGADO: el usuario no ha confirmado esta acción", False)
+                    return Step(name, arguments, "DENEGADO: el usuario no ha confirmado esta acción", False, True)
+                asked = asked or not already_allowed
                 self._intent.remember_destination(external)
                 output = await self._call(name, {**sent, HUMAN_FLAG: True})
         except Exception as exc:  # noqa: BLE001
             return Step(name, arguments, f"ERROR: {type(exc).__name__}: {exc}", False)
         self._intent.observe(name, arguments, output)
-        return Step(name, arguments, output, _salio_bien(output))
+        return Step(name, arguments, output, _salio_bien(output), asked)

@@ -109,6 +109,8 @@ class Session:
                 if line.lower() == NUEVO:
                     agent.reset()
                     self._write("Conversación reiniciada.")
+                elif (reply := agent.command(line)) is not None:
+                    self._write(reply)  # recetas, alias y modo enseñar: sin modelo, en orden con las tareas
                 else:
                     await self._run_one(agent, line)
             finally:

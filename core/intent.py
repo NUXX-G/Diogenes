@@ -169,6 +169,14 @@ class IntentGate:
         if self._referent is not None and self._has_reference(words):
             self._mandate |= self._referent_words()
 
+    def verb_root(self, word: str) -> str | None:
+        """La raíz de `confirmaciones.json` con la que encaja la palabra ("ábreme" → "abr*"), o None si no es un verbo."""
+        for roots in self._config.verbs.values():
+            for root in roots:
+                if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
+                    return root
+        return None
+
     def _is_verb_word(self, word: str) -> bool:
         for roots in self._config.verbs.values():
             for root in roots:
@@ -292,6 +300,20 @@ class IntentGate:
         site = str(args.get("sitio", ""))
         ok = verbs_ok and self._names_site(site)
         return Verdict(ok, site, "" if ok else "esa web no la has nombrado en tu mensaje")
+
+    def grant_alias(self, alias: str, app_id: str, name: str) -> bool:
+        """El usuario llama «alias» a esa app (lo eligió él de una lista): si su mensaje dice el alias, cuenta como que
+        la ha nombrado. Devuelve si se concedió."""
+        words = [w for w in normalize(alias).split() if w not in FILLERS]
+        if not words or not all(_mentions(w, self._mandate) for w in words):
+            return False
+        self._known_apps[app_id] = name
+        self._mandate |= set(normalize(name).split())
+        return True
+
+    def only_closing(self) -> bool:
+        """El mensaje pide cerrar y no abrir."""
+        return self._only_closing()
 
     @property
     def in_web(self) -> bool:

@@ -39,6 +39,8 @@ class Option:
 class PendingChoice:
     request: str  # lo que el usuario pidió originalmente
     options: tuple[Option, ...]
+    tool: str = ""  # la herramienta que ofreció las opciones (apps.open, apps.search, apps.close)
+    query: str = ""  # lo que se buscó ("editor"): si elige una, pasa a ser un alias de esa app
 
 
 def parse_options(tool_output: str) -> tuple[Option, ...]:

@@ -158,18 +158,28 @@ async def test_abre_el_editor_lista_y_el_segundo_se_abre_sin_preguntar() -> None
     assert preguntas.vistas == []
 
 
-async def test_tras_la_lista_otra_opcion_que_el_usuario_no_eligio_si_pide_confirmacion() -> None:
+async def test_tras_la_lista_se_abre_exactamente_la_opcion_elegida_sin_el_modelo() -> None:
+    """Antes el modelo podía abrir otra opción distinta de la elegida (y entonces se pedía confirmación). Ahora la
+    elección se ejecuta en código: el modelo ni interviene."""
     backend = FakeBackend({"apps.search": EMPATE}, TOOLS)
-    llm = FakeLLM(
-        llamar("apps_search", nombre="editor"),
-        decir("¿Cuál? 1. Notepad++ 2. Editor de texto Word"),
-        llamar("apps_launch", id="startapps:notepad"),  # el usuario dijo "el segundo"; el modelo abre el primero
-        decir("no"),
-    )
+    llm = FakeLLM(llamar("apps_search", nombre="editor"), decir("¿Cuál? 1. Notepad++ 2. Editor de texto Word"))
     preguntas = Preguntas()
     agent = agente(llm, backend, preguntas)
     await agent.run("abre el editor")
     await agent.run("el segundo")
+    assert backend.calls[-1] == ("apps.launch", {"id": "startapps:word"})
+    assert preguntas.vistas == [] and len(llm.seen) == 2
+
+
+async def test_si_el_modelo_abre_otra_app_distinta_de_la_pedida_pide_confirmacion() -> None:
+    backend = FakeBackend({"apps.search": EMPATE}, TOOLS)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="editor"),
+        llamar("apps_launch", id="startapps:notepad"),  # pidió el editor de Word; el modelo abre Notepad++
+        decir("no"),
+    )
+    preguntas = Preguntas()
+    await agente(llm, backend, preguntas).run("abre el editor de texto word")
     assert llamadas(backend) == ["apps.search"]
     assert preguntas.vistas[0][1]["destino"] == "Notepad++"
 
