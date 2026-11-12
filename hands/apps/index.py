@@ -9,6 +9,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 
 from rapidfuzz import fuzz, process
 
@@ -82,6 +83,48 @@ def hay_ganador_claro(resultados: Sequence[Resultado]) -> bool:
     if a.con_interfaz != b.con_interfaz:
         return True
     return a.score - b.score > MARGEN_CLARO
+
+
+# Palabras que acompañan al nombre de una app sin ser parte de él ("abre EL bloc DE notas", "la APP de Spotify").
+CONECTORES = frozenset(
+    {
+        "el",
+        "la",
+        "los",
+        "las",
+        "un",
+        "una",
+        "de",
+        "del",
+        "al",
+        "a",
+        "en",
+        "mi",
+        "app",
+        "aplicacion",
+        "programa",
+        "juego",
+    }
+)
+
+
+def palabra_encaja(palabra: str, nombres: list[str]) -> bool:
+    for n in nombres:
+        if palabra == n or (len(palabra) >= 3 and n.startswith(palabra)):
+            return True
+        if min(len(palabra), len(n)) >= 4 and SequenceMatcher(None, palabra, n).ratio() >= 0.8:
+            return True
+    return False
+
+
+def cubre(query: str, entry: AppEntry) -> bool:
+    """¿La consulta nombra esa app y nada más? Con una sola palabra decide el índice (tolera erratas y abreviaturas);
+    con varias, cada palabra tiene que encajar con el nombre o un alias: "spotify y pon daft punk" no es "Spotify"."""
+    palabras = [w for w in normalize(query).split() if w not in CONECTORES]
+    if len(palabras) <= 1:
+        return True
+    nombres = [w for text in (entry.name, *entry.aliases) for w in normalize(text).split()]
+    return all(palabra_encaja(p, nombres) for p in palabras)
 
 
 class AppIndex:

@@ -41,13 +41,14 @@
     },
     "herramientas": {
       "apps.launch": {"verbos": ["abrir"], "objetivo": "app"},
+      "apps.open": {"verbos": ["abrir"], "objetivo": "app"},
       "apps.close": {"verbos": ["cerrar"], "objetivo": "app"},
     "apps.force_close": {"verbos": ["cerrar"], "objetivo": "app"},
       "web.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "browser.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "web.site_search": {"verbos": ["buscar", "abrir", "navegar"], "objetivo": "sitio"}
     },
-    "bloqueadas_al_cerrar": ["apps.launch"],
+    "bloqueadas_al_cerrar": ["apps.launch", "apps.open"],
     "libres_en_web": ["browser.click", "browser.type"],
     "palabras_genericas": ["de", "del", "la", "el", "los", "las", "app", "apps", "application", "aplicacion", "microsoft", "windows", "google", "the", "for", "desktop", "classic", "new", "version", "launcher"]
   },

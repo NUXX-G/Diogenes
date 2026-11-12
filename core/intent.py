@@ -58,6 +58,10 @@ FILLERS = frozenset(
     }
 )
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
+# Herramientas que buscan y abren por nombre en un paso: se juzgan como apps.launch (un config antiguo no las lista).
+OPEN_BY_NAME = ("apps.open",)
+# Conjunciones que encadenan otra orden ("abre Spotify Y pon Daft Punk").
+CHAINING = frozenset({"y", "e", "luego", "despues", "tambien", "ademas", "and", "then"})
 
 
 @dataclass(frozen=True)
@@ -79,12 +83,18 @@ class IntentConfig:
         tools = {
             name: Rule(tuple(rule["verbos"]), str(rule["objetivo"])) for name, rule in data["herramientas"].items()
         }
+        blocked = set(data.get("bloqueadas_al_cerrar", ["apps.launch"]))
+        if "apps.launch" in tools:
+            for name in OPEN_BY_NAME:
+                tools.setdefault(name, tools["apps.launch"])
+                if "apps.launch" in blocked:
+                    blocked.add(name)
         return cls(
             verbs={group: tuple(roots) for group, roots in data["verbos"].items()},
             tools=tools,
             free_in_web=frozenset(data.get("libres_en_web", [])),
             generic_words=frozenset(normalize(w) for w in data.get("palabras_genericas", [])),
-            blocked_when_closing=frozenset(data.get("bloqueadas_al_cerrar", ["apps.launch"])),
+            blocked_when_closing=frozenset(blocked),
         )
 
     @classmethod
@@ -183,6 +193,14 @@ class IntentGate:
             return None  # "ábrelo", "abre eso": no hay nada que buscar (lo resuelve la conversación)
         return " ".join(target)
 
+    def is_compound(self, user_text: str) -> bool:
+        """¿Encadena varias órdenes? Una conjunción ("y", "luego", "después") seguida más adelante de otro verbo."""
+        words = normalize(user_text).split()
+        for i, word in enumerate(words):
+            if word in CHAINING and any(self._is_verb_word(w) for w in words[i + 1 :]):
+                return True
+        return False
+
     def _has_reference(self, words: list[str]) -> bool:
         """¿Hay un pronombre ("eso", "la misma") o un verbo con pronombre pegado ("ciérralo", "ábrelo")?"""
         for word in words:
@@ -249,7 +267,8 @@ class IntentGate:
 
     def check(self, tool: str, args: dict[str, Any]) -> Verdict:
         if tool in self._config.blocked_when_closing and self._only_closing():
-            return Verdict(False, str(args.get("id", "")), "has pedido cerrar, no abrir", blocked=True)
+            target = str(args.get("id") or args.get("nombre") or "")
+            return Verdict(False, target, "has pedido cerrar, no abrir", blocked=True)
         rule = self._config.tools.get(tool)
         if rule is None:
             if tool in self._config.free_in_web and not self._web_ok:
@@ -257,7 +276,7 @@ class IntentGate:
             return Verdict(True)
         verbs_ok = self._has_verb(rule.verbs)
         if rule.target == "app":
-            app_id = str(args.get("id", ""))
+            app_id = str(args.get("id") or args.get("nombre") or "")
             name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)  # nombre en vez de id
             ok = verbs_ok and name is not None and self._names_app(name)
             return Verdict(ok, name or app_id, "" if ok else "no lo has pedido en tu mensaje")
@@ -273,6 +292,15 @@ class IntentGate:
         site = str(args.get("sitio", ""))
         ok = verbs_ok and self._names_site(site)
         return Verdict(ok, site, "" if ok else "esa web no la has nombrado en tu mensaje")
+
+    @property
+    def in_web(self) -> bool:
+        """¿Se está trabajando en una web en esta conversación?"""
+        return self._web_ok or bool(self._web_hosts)
+
+    def app_name(self, app_id: str) -> str | None:
+        """El nombre de una app que ya salió en la conversación (por su id), o None."""
+        return self._known_apps.get(app_id)
 
     def destination_allowed(self, url: str) -> bool:
         """¿Esa web la ha pedido el usuario, o ya la confirmó o se está trabajando en ella en esta conversación?"""
@@ -297,8 +325,18 @@ class IntentGate:
                         self._referent = ("app", str(item["nombre"]))
             return
         rule = self._config.tools.get(tool)
+        if tool in OPEN_BY_NAME and data.get("id") and data.get("nombre"):  # abrió (o propuso) una app concreta
+            self._known_apps[str(data["id"])] = str(data["nombre"])
+        for item in data.get("opciones") or []:
+            if (
+                isinstance(item, dict)
+                and item.get("id")
+                and item.get("nombre")
+                and len(self._known_apps) < MAX_KNOWN_APPS
+            ):
+                self._known_apps[str(item["id"])] = str(item["nombre"])
         if rule is not None and rule.target == "app":  # se ejecutó por orden del usuario: de eso se habla ahora
-            app_id = str(args.get("id", ""))
+            app_id = str(data.get("id") or args.get("id") or args.get("nombre") or "")
             name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)
             if name:
                 self._referent = ("app", name)

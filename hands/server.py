@@ -25,7 +25,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from hands.actionlog import ActionLog
 from hands.apps import desktop, discovery, launcher
 from hands.apps.cache import DEFAULT_PATH, DEFAULT_TTL_SECONDS, IndexCache
-from hands.apps.index import AppIndex, hay_ganador_claro
+from hands.apps.index import AppIndex, cubre, hay_ganador_claro
 from hands.apps.models import AppEntry
 from hands.apps.policy import LaunchPolicy
 from hands.browser.service import BrowserService
@@ -225,6 +225,61 @@ def build_server(
 
         logged = {"id": id, "confirmado": True} if confirmado else {"id": id}
         return await audited("apps.launch", logged, run)
+
+    @server.tool(
+        name="apps.open",
+        description=(
+            "Busca una aplicación, juego, carpeta o archivo por su nombre y, si hay un ganador claro, lo abre en el "
+            "mismo paso (lanzada=true). Si no lo hay, no abre nada y devuelve opciones numeradas: pregunta cuál. "
+            "Si no encuentra nada, lo dice. Los ejecutables y scripts devuelven requiere_confirmacion."
+        ),
+    )
+    async def apps_open(nombre: str, confirmado: bool = False) -> dict[str, Any]:
+        async def run() -> dict[str, Any]:
+            if (waiting := await not_ready()) is not None:
+                return waiting
+            await refresh_desktop()
+            found = index.search(nombre, limit=5)
+            if not found and await refresh_desktop(force=True):
+                found = index.search(nombre, limit=5)
+            if not found:
+                return {
+                    "ok": True,
+                    "lanzada": False,
+                    "mensaje": f"No hay ninguna app, juego, carpeta ni archivo que se llame «{nombre}». No he abierto nada.",
+                    "resultados": [],
+                }
+            winner = found[0].entry
+            if not (hay_ganador_claro(found) and cubre(nombre, winner)):
+                items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
+                opciones = [{"n": n, **item} for n, item in enumerate(items[:MAX_OPCIONES], start=1)]
+                return {
+                    "ok": True,
+                    "lanzada": False,
+                    "ganador_claro": False,
+                    "mensaje": f"No he abierto nada: «{nombre}» encaja con {len(opciones)} opciones.",
+                    "instruccion": "Pregunta al usuario cuál de las opciones numeradas quiere.",
+                    "opciones": opciones,
+                }
+            review = policy.assess(winner)
+            if not confirmado and review.requires:
+                return {
+                    "ok": False,
+                    "requiere_confirmacion": True,
+                    "objetivo": f"{winner.name} ({review.target})",
+                    "motivo": review.reason,
+                }
+            launch(winner)
+            return {
+                "ok": True,
+                "lanzada": True,
+                "id": winner.id,
+                "nombre": winner.name,
+                "mensaje": f"Lanzado {winner.name}",
+            }
+
+        logged = {"nombre": nombre, "confirmado": True} if confirmado else {"nombre": nombre}
+        return await audited("apps.open", logged, run)
 
     if media is not None:
 
