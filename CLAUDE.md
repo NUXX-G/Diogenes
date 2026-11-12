@@ -41,27 +41,46 @@ Reglas:
 
 ## Arquitectura
 
+Objetivo, pensado para CPU. Hoy existen el router N0, el planificador, la puerta, las recetas, el pánico, `hands-mcp` (apps, web, navegador, cierres, multimedia) y Ollama nativo; el resto llega con las fases de la hoja de ruta.
+
 ```
-                 VOZ                          TEXTO
-   micro → wake word / push-to-talk     panel overlay (Ctrl+Alt+D) · Telegram
-            → STT (faster-whisper)                 │
-                       └───────────────┬───────────┘
-                                       ▼
-                        diogenes-core (Python, anfitrión Windows)
-                        ├─ router: atajo rápido │ receta conocida │ planificador LLM
-                        ├─ bucle agente: planificar → actuar → verificar (máx. N pasos)
-                        ├─ memoria + recetas (SQLite)
-                        └─ TTS (Piper) para responder en voz
-                                       │ MCP (HTTP, 127.0.0.1 + token)
-                 ┌─────────────────────┼─────────────────────┐
-                 ▼                     ▼                     ▼
-          hands-mcp (anfitrión)   tools-mcp (Docker)     ollama (Docker)
-          apps, web, UI, pantalla Gmail, Calendar,       qwen3:4b-instruct
-          sistema, multimedia     tareas, casa-sim       (texto)         
+  VOZ (hilo de audio en core)            TEXTO / REMOTO                    OBSERVADORES
+  micro → VAD → PTT / wake word     consola · overlay (Ctrl+Alt+D)    Husk: hooks de Claude Code,
+        → STT (proceso aparte)      Telegram (bot propio, saliente)     Codex, OpenCode → POST local
+                │                              │                                  │
+                └──────────────┬───────────────┴──────────────────────────────────┘
+                               ▼
+ ┌───────────────────────── diogenes-core (asyncio, anfitrión) ─────────────────────────────┐
+ │  N0 router sin LLM: atajos · elección · alias · recetas · recordatorios     (< 300 ms)   │
+ │  N1 clasificador sin LLM: reglas + rapidfuzz (+ model2vec si hace falta)    (< 50 ms)    │
+ │     ├─ charla ─────────► N2 personaje: prompt corto, sin herramientas, ≤ 25 palabras     │
+ │     └─ acción ─────────► N3 planificador: prompt compacto, herramientas en orden fijo    │
+ │  Trabajos: cola, panel de pasos, interrumpir, /parar, Ctrl+Alt+Esc, aviso si nada cambia │
+ │  Puerta: IntentGate + interruptores/presets + confirmaciones.json + _grounded            │
+ │  Memoria · notas .md · recetas · uso · alias (SQLite) · personalidad.md + capas fijas    │
+ │  Bus de eventos ─► estado (escuchando, pensando, acción, ⚠, error, hecho)                │
+ │  LLMProvider: Ollama local │ OpenAICompat en la nube (solo personal, opcional)           │
+ └───────┬───────────────────────┬──────────────────────────┬──────────────────┬────────────┘
+         │ MCP HTTP 127.0.0.1    │ eventos (WebSocket       │ TTS Piper        │ MCP (stdio)
+         │ + token               │ 127.0.0.1 + token)       │ en streaming     │ manifiesto aprobado
+         ▼                       ▼                          ▼                  ▼
+ hands-mcp (anfitrión)      overlay (proceso PySide6)    altavoz        plugins MCP
+ apps · uri · web ·         sprites propios, bandeja,                   (sus herramientas
+ browser (CDP) ·            mini reproductor, ⚠ junto                   preguntan por
+ ventanas · sistema ·       al ratón                                    defecto)
+ OCR · UIA · ratón ·
+ captura + diff (watch_for)
+         │
+ Ollama nativo 127.0.0.1:11434 (num_thread 6, num_ctx 8192, precargado al arrancar)
 ```
 
+- **El overlay es otro proceso**: Qt no bloquea el bucle del agente ni al revés; si se cae, Diogenes sigue. Recibe eventos de estado por un WebSocket local con token.
+- **El STT corre en un proceso aparte** y se carga al arrancar; el personaje reacciona (animación y frase pregrabada) en cuanto llega la orden, aunque el modelo tarde.
+- **`watch_for` y el OCR viven en `hands-mcp`** (necesitan el escritorio): la vigilancia compara capturas reducidas y lee con OCR; la condición se evalúa en código y el modelo no se llama en cada vistazo.
+- **Husk y Telegram solo hablan con core**: todo pasa por la misma puerta y las mismas confirmaciones. Husk solo observa y avisa.
+- **Plugins por MCP en proceso aparte**, con manifiesto de permisos y hash aprobado; nunca código cargado dentro de core.
 - `hands-mcp` corre **fuera de Docker** porque necesita el escritorio de Windows. Escucha solo en `127.0.0.1` y exige un token compartido.
-- `diogenes-core` es el cliente MCP principal. n8n (del stack de clase) usa solo `tools-mcp`.
+- `diogenes-core` es el cliente MCP principal. n8n (del stack de clase) usa solo `tools-mcp`, que el modo personal puede usar como un MCP más.
 - El proveedor del LLM se abstrae tras una interfaz `LLMProvider` (Ollama por defecto; cualquier servidor compatible con OpenAI como opción). El stack de clase solo admite Ollama local.
 
 ## Cómo resuelve una petición
@@ -126,7 +145,7 @@ Los mensajes cuyo objetivo es solo un pronombre («ciérralo», «ábrelo otra v
 ## Entrada y salida
 
 - **Voz**: `openWakeWord` siempre escuchando. Hasta que tengamos un modelo propio de «Diógenes» (se entrena gratis con el notebook de openWakeWord y datos sintéticos), se usa **push-to-talk** (`Ctrl+Alt+Espacio`). STT con `faster-whisper` (`base` o `small`, español) y VAD para cortar al acabar de hablar. TTS con **Piper**, voz en español.
-- **Texto**: panel overlay siempre disponible (`Ctrl+Alt+D`) y Telegram (el mismo bot del proyecto de clase, restringido a nuestros chat IDs).
+- **Texto**: panel overlay siempre disponible (`Ctrl+Alt+D`) y Telegram con un **bot propio del modo personal**, distinto del de clase (Telegram solo admite un long polling por token: compartirlo podría tumbar la demo), restringido a nuestros chat IDs. Por Telegram nunca salen capturas ni páginas, solo frases cortas y botones de confirmación.
 - **Estado visible**: un indicador muestra en qué está Diogenes (escuchando, pensando, la acción actual, esperando confirmación, error, hecho). Ver la sección Personaje.
 
 ## Seguridad mínima (aunque sea de uso personal)
@@ -147,18 +166,70 @@ Damos control amplio, pero con estas reglas que no se negocian:
 
 - **Python 3.12** (se admite también 3.13 y 3.14: en los PCs del centro la política de control de aplicaciones bloquea el `_sqlite3.pyd` del Python 3.12 que instala `uv`, y allí se usa el Python del sistema), gestionado con `uv`. Lint y formato con `ruff`. Tipado con anotaciones en todo.
 - **MCP**: SDK oficial de Python (`mcp`), transporte HTTP.
-- **Windows**: `pywinauto` / `uiautomation`, `pywin32`, `keyboard` o `pynput` para atajos globales. Sesiones multimedia: `winrt-Windows.Media.Control` (y sus dependencias `winrt-*`, fijadas en `pyproject.toml`).
+- **Windows**: `pywinauto` / `uiautomation`, `pywin32`, `keyboard` o `pynput` para atajos globales. Sesiones multimedia: `winrt-Windows.Media.Control` (y sus dependencias `winrt-*`, fijadas en `pyproject.toml`). Previstos: OCR con `winrt-Windows.Media.Ocr` + captura con `mss`, volumen por app con `pycaw`, estado del PC con `psutil`.
+- **Python 3.14 en el aula** (comprobado el 2026-11-12 con `uv pip compile --only-binary`): hay ruedas para Windows de `faster-whisper`, `sherpa-onnx`, `piper-tts`, `PySide6`, `openwakeword`, `onnxruntime`, `webrtcvad-wheels`, `uiautomation`, `winrt-Windows.Media.Ocr`, `python-telegram-bot` y `model2vec`; **no** de `llama-cpp-python` (llama.cpp sería el binario `llama-server`). Que haya rueda no garantiza que la política del centro deje cargar sus DLL: se prueba antes de diseñar alrededor.
 - **Navegador**: `playwright` conectado por CDP a un perfil dedicado.
-- **Voz**: `openWakeWord`, `faster-whisper`, `piper-tts`, `sounddevice`, `webrtcvad` o `silero-vad`.
+- **Voz**: `openWakeWord`, `sounddevice`, VAD con `webrtcvad-wheels` (o Silero en ONNX; el paquete `silero-vad` arrastra `torch`), STT con `faster-whisper` (`small` int8) frente a `sherpa-onnx` + Parakeet TDT 0.6B v3 int8 (habla español, CC-BY-4.0: hay que acreditar), a medir; TTS con `piper-tts` en streaming por frases (comprobar la licencia de la voz).
+- **Telegram**: `python-telegram-bot` por long polling, bot propio del modo personal.
 - **Búsqueda difusa**: `rapidfuzz`.
 - **Overlay**: `PySide6` (ventana transparente, siempre encima, sin marco).
-- **LLM**: Ollama con `qwen3:4b-instruct` (Qwen3 Instruct 2507, `q4_K_M`) como modelo principal; configurable con `DIOGENES_OLLAMA_MODEL`. `qwen3.5:4b` queda como alternativa (es el que tiene visión, necesaria para el escalón 6). Modo thinking desactivado para las acciones.
+- **LLM**: Ollama con `qwen3:4b-instruct` (Qwen3 Instruct 2507, `q4_K_M`) como modelo principal; configurable con `DIOGENES_OLLAMA_MODEL`. `qwen3.5:4b` queda como alternativa (es el que tiene visión, necesaria para el escalón 6). Modo thinking desactivado para las acciones. Configuración decidida el 2026-11-12 para el PC de clase: `q4_K_M`, **`num_thread` 6** (`DIOGENES_OLLAMA_NUM_THREAD`), **precarga al arrancar** y `num_ctx` 8192 (4096 cuando el prompt adelgace: hoy Ollama lo rechaza porque no cabe) (ver Rendimiento en CPU). Candidato a medir: **LFM2.5-8B-A1B** (MoE, ~1,5B activos).
   - **Por qué no `qwen3.5:4b` por defecto**: en la batería de la PR #1 llamó a una herramienta inyectada desde un correo (`qwen3:4b-instruct` resistió 3/3, `qwen3.5:4b` 0/3). En modo personal el agente controla el PC, así que el riesgo pesa más. Detalle en [`modelos/comparativa.md`](modelos/comparativa.md).
   - **Ningún modelo es la defensa contra inyecciones.** La barrera real es la confirmación impuesta en código para las acciones irreversibles (ver Seguridad mínima); elegir un modelo más resistente no la relaja.
-  - **Limitación del hardware del aula (medido el 2026-11-10 en el PC de clase, solo CPU, `size_vram: 0`, 6 hilos)**: `qwen3:4b-instruct` tarda **5–10 s por llamada al modelo** con el modelo cargado (5 s el primer paso, ~10 s el segundo, con el prompt de sistema y las 13 herramientas) y **~85 s la primera llamada** si estaba descargado (carga en frío). Una tarea de 4–6 pasos ronda por tanto 30–60 s, y tras 5 min sin uso, 90 s más. Por eso `OllamaProvider` envía `keep_alive` de `30m` (configurable con `DIOGENES_OLLAMA_KEEP_ALIVE`). No es un fallo de Diogenes: los atajos del router (media, volumen) no usan el LLM y responden al instante, y la visión (escalón 6) con `qwen3.5:4b` será mucho más lenta. Una latencia de 30–100 s por paso solo aparece en frío o con el equipo cargado.
-- **Latencia** (medida el 2026-11-12, detalle en [`modelos/latencia.md`](modelos/latencia.md)): en la CPU del aula generar va a ~3,4 tokens/s y leer prompt nuevo a ~33 tokens/s; lo que Ollama ya tiene en su caché de prefijo sale casi gratis. Reglas que salen de ahí: (1) cada llamada al modelo que se pueda evitar se evita (`apps.open`, respuesta por plantilla, elección en código, recetas); (2) **no se cambia el principio del prompt** entre llamadas: prompt de sistema estable, herramientas en orden fijo, historial recortado a saltos (hasta la mitad de los topes) en vez de un turno cada vez; (3) **lo que ve el modelo de cada página se recorta** a ~1600 caracteres (`MODEL_PAGE_CHARS`; las recetas usan la página entera) y `web.site_search`/`web.open` ya traen la página, sin snapshot aparte; (4) **se enseñan todas las herramientas** (`DIOGENES_HERRAMIENTAS=relevantes` existe pero es más lento: volver a enseñar las quitadas cuesta ~20 s); (5) `num_ctx` fijo (`DIOGENES_OLLAMA_NUM_CTX`, 8192): cambiarlo recarga el modelo. Medir con `python -m core.bench` (LLM simulado) o `--real`; el CLI enseña por turno la ruta, las llamadas al modelo, los segundos de leer y generar y el total, y lo guarda en `logs/core-*.jsonl` sin el texto del usuario.
+  - **Limitación del hardware del aula (medido el 2026-11-10 en el PC de clase, solo CPU, `size_vram: 0`, 6 hilos; con los hilos que pone Ollama por defecto, que no aprovechan los 6: ver Rendimiento en CPU)**: `qwen3:4b-instruct` tarda **5–10 s por llamada al modelo** con el modelo cargado (5 s el primer paso, ~10 s el segundo, con el prompt de sistema y las 13 herramientas) y **~85 s la primera llamada** si estaba descargado (carga en frío). Una tarea de 4–6 pasos ronda por tanto 30–60 s, y tras 5 min sin uso, 90 s más. Por eso `OllamaProvider` envía `keep_alive` de `30m` (configurable con `DIOGENES_OLLAMA_KEEP_ALIVE`). No es un fallo de Diogenes: los atajos del router (media, volumen) no usan el LLM y responden al instante, y la visión (escalón 6) con `qwen3.5:4b` será mucho más lenta. Una latencia de 30–100 s por paso solo aparece en frío o con el equipo cargado.
+- **Latencia**: ver la sección Rendimiento en CPU.
 - **Ollama**: `DIOGENES_OLLAMA_BASE_URL` configurable. En modo personal el valor por defecto es `http://127.0.0.1:11434` (Ollama nativo); el del compose (puerto `11435` del anfitrión) no se toca. Llevan el prefijo `DIOGENES_` porque `OLLAMA_MODEL` y `OLLAMA_BASE_URL` del `.env` ya los usa el stack Docker con otros valores.
 - Versiones fijadas en `pyproject.toml` y `uv.lock`. Nada de rangos abiertos.
+
+## Rendimiento en CPU
+
+El PC de clase manda sobre todo lo demás: HP ProDesk 400 G5, i5-8600 (6 núcleos / 6 hilos, AVX2), **16 GB DDR4 en doble canal a 2667 MT/s** (2 × 8 GB, `ChannelA` y `ChannelB`; comprobado el 2026-11-12), gráfica integrada inútil para LLM. Los portátiles con GPU son un extra.
+
+### Lo medido (2026-11-12, Ollama 0.40.16, `qwen3:4b-instruct` Q4_K_M; detalle en [`modelos/latencia.md`](modelos/latencia.md))
+
+- **Hilos**: con los que pone Ollama por defecto se lee el prompt a ~33 tok/s y se genera a 2,5 tok/s con 4k de contexto; con **`num_thread` 6**, a 53–66 tok/s y 4,2 tok/s. Es gratis. Cambiar `num_thread` o `num_ctx` entre peticiones recarga el modelo (3–6 s): se fijan al arrancar.
+- **Generar se hunde con el contexto** (6 hilos): 9,0 tok/s con 256 tokens, 8,7 con 1k, 6,8 con 2,1k y 4,2 con 4,2k. Recortar el prompt acelera también cada token de salida, no solo la lectura.
+- **Lo que ya está en la caché de prefijo de Ollama sale casi gratis**; lo nuevo cuesta. Ollama guarda un solo prefijo.
+- **Lo que mandamos**: el prompt de sistema son **2086 tokens** (7500 caracteres) y los esquemas de las 17 herramientas **~1650**; antes de que el usuario hable ya hay ~3,7k tokens. El historial llega a 12 000 caracteres y cada página a 1600.
+- La red del centro deja pasar NVIDIA, Groq, Cerebras, Gemini, OpenRouter, GitHub Models, Telegram y Hugging Face (probado sin claves).
+
+### Niveles y objetivos
+
+| Nivel | Qué resuelve | Objetivo en el PC de clase |
+|---|---|---|
+| N0 sin LLM | atajos, elección, alias, recetas, recordatorios | < 300 ms en decidir (+ lo que tarde la app) |
+| N1 clasificador sin LLM | charla / acción / atajo / receta (reglas + `rapidfuzz`; `model2vec` solo si las reglas fallan más de un 10 %) | < 50 ms |
+| N2 personaje | charla sin herramientas, ≤ 25 palabras | reacción < 300 ms (animación y frase pregrabada), primera palabra hablada < 3 s, respuesta < 6 s |
+| N3 planificador | acción simple la primera vez | ≤ 5 s |
+| N3 planificador | tarea de navegador de 4–6 pasos | ≤ 45 s, y receta después |
+| Arranque en frío | primera orden | 0 visible: precarga al arrancar, en segundo plano |
+| Visión | último recurso | 30–120 s, avisando |
+
+### Reglas
+
+1. **Cada llamada al modelo que se pueda evitar se evita**: atajos, `apps.open`, elección en código, recetas, alias y respuesta por plantilla.
+2. **No se cambia el principio del prompt entre llamadas**: prompt de sistema estable, herramientas en orden fijo, historial recortado a saltos (hasta la mitad de los topes) en vez de un turno cada vez. Una personalidad editada invalida la caché una vez.
+3. **Lo que ve el modelo de cada página se recorta** (`MODEL_PAGE_CHARS`, ~1600; las recetas usan la página entera) y `web.site_search`/`web.open` ya traen la página, sin snapshot aparte.
+4. **Se enseñan todas las herramientas**, compactas (`DIOGENES_HERRAMIENTAS=relevantes` existe pero es más lento: volver a enseñar las quitadas cuesta ~20 s).
+5. **`num_thread` 6 y `num_ctx` fijos, y precarga al arrancar** (`DIOGENES_OLLAMA_NUM_THREAD`, `DIOGENES_OLLAMA_NUM_CTX`, `DIOGENES_PRECARGA`), con `keep_alive` de `30m`. Medido: el banco real pasa de 323,7 s a 203,5 s y la primera orden en frío, de 134 s a 6 s. `num_ctx` sigue en 8192: con 4096 Ollama rechaza el prompt de hoy (~4000 tokens antes del historial); se baja tras la dieta del prompt, y la ventana reservada apenas cambia la velocidad (ahorra ~0,6 GB de RAM).
+6. **Dieta del prompt** (siguiente paso): prompt de sistema ≤ 700 tokens (lo que ya impone el código sale del prompt, con su test o caso de batería), herramientas ≤ 900, historial viejo resumido por el código, `num_predict` según el tipo de llamada.
+7. Nada cambia de modelo, cuantización ni motor sin pasar la batería (tool calling en español e inyección) y `core.bench --real` en el PC de clase.
+
+### Motor y modelos
+
+- **Ahora**: Ollama nativo con la configuración de arriba y `qwen3:4b-instruct` Q4_K_M.
+- **A medir**: `OLLAMA_FLASH_ATTENTION=1` y `OLLAMA_KV_CACHE_TYPE=q8_0` (con un `ollama serve` propio lanzado desde el repo en otro puerto, nada global); `llama-server` con `-t 6`, `--cache-reuse`, `--mlock`, dos slots con prefijo fijo y `--slot-save-path` (se cambia solo si gana ≥ 30 % o resuelve el arranque en frío, y si la política del centro deja ejecutarlo); cuantización Q4_K_M frente a Q4_0 y Q8_0.
+- **Candidatos**: LFM2.5-8B-A1B (primero), LFM2.5-2.6B, `gemma4:e2b`, `qwen3:1.7b` sin thinking y el Granite pequeño con herramientas. Qwen3-30B-A3B no cabe en 16 GB. Un modelo pequeño para N2 junto al de planificar solo si baja la charla de 6 s a menos de 3 s.
+- **Con GPU**: un 8B en Q4 (o Gemma 4 E4B con visión); el tamaño del prompt deja de mandar.
+- **Nube** (solo modo personal, fase de nube): `OpenAICompatProvider` desactivado por defecto, con caída a local, filtro de datos y la misma puerta. Las cifras de los tiers gratuitos cambian y las fuentes no coinciden: se comprueban con la clave en la mano.
+
+### Qué sirve también a la versión de clase
+
+Se mide aquí, pero se aplica y se revisa **en el repo de clase**, contra el enunciado: `num_thread`, `keep_alive` y precarga, `num_ctx` real (la caché KV de qwen3-4B ocupa ~144 KB por token en f16: 8k ≈ 1,2 GB y 64k ≈ 9,4 GB, que no cabe con el límite por defecto de WSL2), la curva de generación según el contexto, cuantización, máximo de tokens de salida, temperatura/top-p/top-k, prompt corto y herramientas compactas, y flash attention con caché KV q8. Son material de sus Fases 2 y 3. No sirven allí: `llama-server`, el router sin LLM, las recetas y el clasificador. La nube, **nunca**.
+
+### Medición
+
+`python -m core.bench` (LLM simulado) y `--real`. Cada fila debe guardar tokens de prefill nuevos y totales, segundos de leer y de generar, tok/s, tiempo hasta la primera palabra (cuando haya streaming), aciertos de tool calling y RAM del modelo. El CLI enseña por turno la ruta, las llamadas al modelo, los segundos de leer y generar y el total, y lo guarda en `logs/core-*.jsonl` sin el texto del usuario.
 
 ## Estructura del repo
 
@@ -197,21 +268,29 @@ diogenes/
 
 Este repo es el modo personal. La entrega de clase (11 de diciembre) se prepara en su propio repo y tiene prioridad: el trabajo de aquí avanza en paralelo, sin bloquearla.
 
+**Hasta el 11 de diciembre**, el modo personal se lleva como mucho un 15 % del tiempo (una tarde a la semana) y solo en lo que sirve también a la clase: la medición de la fase 5 alimenta la guía de parámetros (Fase 3 de clase). Al repo de clase le faltan, en este orden: lo pendiente de su Fase 0, Fase 3 (parámetros), Fase 4 (n8n + Telegram), Fase 5 (`tools-mcp`) y Fase 6 (riesgos, inyección, grabación, release). El resto de fases empieza después de la demo. Plan completo y razonado en el informe 3 de `informes/` (2026-11-12); quién hace cada fase: **N** Nelson, **Y** Yeray, **N+Y** ambos.
+
 1. **[Hecha] Esqueleto**: `hands-mcp` con `apps.search` y `apps.launch` (índice del menú Inicio + Steam + Epic) y un CLI de texto en `core` que llama al LLM con esas herramientas. Hito: «abre Spotify» y «abre Brawlhalla» funcionan escritos.
 2. **[Hecha] Web**: `web.open` y `web.site_search` con OpenSearch y plantillas aprendidas. Hito: «búscame en YouTube cómo hacer mochis».
 3. **[Hecha] Navegador**: `browser.*` con Playwright por CDP (escalón 4), genérico y sin código por web. Hito: «dame el vídeo más visto del canal Hrom» y «búscame en Wikipedia Diógenes de Sinope». *Adelantada desde la fase 6*: peticiones como «dame el vídeo más visto del canal X» necesitan varios pasos dentro de una web (abrir canal, pestaña de vídeos, ordenar, abrir el primero) y hoy solo se sabe buscar. También cubre el hueco de `web.site_search` cuando no hay plantilla ni OpenSearch.
 4. **[Hecha] Recetas y latencia**: recetas en SQLite (automáticas y enseñadas con `/aprender`), reproducción verificada paso a paso, degradación, alias aprendidos al elegir, comandos `/recetas` y `/alias`, `apps.open`, respuesta por plantilla, elección en código, historial recortado a saltos y búsqueda forzada según la orden. Hito: en el banco simulado, las cinco órdenes típicas bajan de 32 llamadas al modelo a 4 en dos pasadas (564 s → 166 s) y la segunda pasada no llama al modelo; con el modelo real, la primera pasada baja de 16 llamadas y 237 s a 4 y 59 s; «dame el vídeo más visto del canal X», enseñada una vez, funciona con otro canal sin el planificador. Segunda ronda: emparejamiento flexible al reproducir (Lofi Girl con la receta enseñada con Hrom, en el banco), aviso del paso que falla y continuación desde la página, disparadores con palabras opcionales y sin duplicados, `apps.abiertas`, páginas recortadas, uso con decaimiento, ascenso a atajo y `/frecuentes`. Lofi Girl confirmado en el aula con el YouTube real (receta n.º 4, sin modelo). Tercera ronda: cierres por nombre contra las ventanas reales, ⚠ con la app y sus ventanas, sin coincidencias falsas en `apps.abiertas` ni contradicciones con ella.
-5. **[En curso] Sistema y multimedia**: atajos del router, volumen, ventanas. Botón del pánico. Hecho: atajos del router, `media.key`, `apps.close` y `apps.force_close`, botón del pánico (`Ctrl+Alt+Esc` y `/parar`). `media.sessions` y `media.control` (API WinRT `winrt-Windows.Media.Control`, versión fijada; sin ella caen a `media.key`). El índice relee el escritorio al buscar, así que un archivo nuevo sale sin reiniciar. Falta: `system.volume`, `window.focus/minimize`, `clipboard` y bloquear la pantalla.
-6. **[Pendiente] Voz**: push-to-talk, STT y TTS. Hito: los tres ejemplos de arriba funcionan hablando.
-7. **[Pendiente] Interfaz nativa**: árbol UIA. Hito: una tarea dentro de una app sin protocolo ni búsqueda por URL.
-8. **[Pendiente] Visión**: `screen.look` como último recurso.
-9. **[Pendiente] Overlay y personaje**.
-10. **[Pendiente] Wake word propia** «Diógenes».
-11. **[Pendiente] Telegram desde el móvil**: control remoto con confirmaciones por botones y `/parar`.
-12. **[Pendiente] Selección de pantalla con OCR**.
-13. **[Pendiente] Nube como planificador opcional**: solo en modo personal.
+5. **[En curso] Rendimiento en CPU** (ver la sección Rendimiento en CPU) — **Y** la medición, **N+Y** la dieta. (a) `num_thread` 6 configurable y precarga al arrancar, medido antes y después con `core.bench` (PR #9); `core.bench` con tokens de prefill, tok/s y tiempo hasta la primera palabra; probar que la política del centro deja cargar las DLL de `onnxruntime`, `PySide6` y `ctranslate2` y el binario de `llama-server`. (b) Dieta del prompt, y después `num_ctx` 4096: sistema ≤ 700 tokens, herramientas ≤ 900, historial viejo resumido, `num_predict` por tipo. (c) Batería de modelos y motor: LFM2.5-8B-A1B y los demás candidatos, Q4_0, flash attention, `llama-server` con slots guardados. Hito: en el banco real, la 1.ª pasada de las órdenes típicas ≤ 30 s de modelo, «abre X» nueva ≤ 5 s y la batería sin pérdidas; decisión de modelo y motor con números.
+6. **[En curso] Sistema y multimedia** — **N**. Hecho: atajos del router, `media.key`, `apps.close` y `apps.force_close`, botón del pánico (`Ctrl+Alt+Esc` y `/parar`). `media.sessions` y `media.control` (API WinRT `winrt-Windows.Media.Control`, versión fijada; sin ella caen a `media.key`). El índice relee el escritorio al buscar, así que un archivo nuevo sale sin reiniciar. Falta: volumen por app (`system.volume`), ventanas que devuelven dónde quedaron (mover, ajustar, monitor, `focus`, `minimize`), `clipboard`, energía (bloquear directo; suspender y apagar con confirmación), `pc_status`, `internet_status`, `find_file` y `read_file` con límites, y un escritorio falso con monitores en el banco. `run_terminal` más tarde, siempre con confirmación y el comando exacto a la vista. Hito: diez órdenes nuevas sin LLM o con una llamada, verificadas.
+7. **[Pendiente] Voz** — **Y**. Push-to-talk, VAD, STT medido (`faster-whisper` frente a Parakeet), Piper en streaming por frases y reacción inmediata. Hito: los tres ejemplos de arriba funcionan hablando, con la primera palabra hablada < 3 s tras acabar la orden.
+8. **[Pendiente] Personaje y memoria** — **N**. `personalidad.md` corta y editable con Seguridad y Maquinaria fijas en código detrás (las líneas que las contradigan se ignoran y se avisa); ruta N2 de charla sin herramientas; interruptores por tipo de acción con presets (lo apagado pregunta; contraseñas y pagos fuera de cualquier preset) que se traducen a `confirmaciones.json`; memoria discreta (SQLite + FTS5, sin datos personales); notas Markdown compatibles con Obsidian; recordatorios y check-ins. Hito: «recuérdame a las 18 regar las plantas» avisa a su hora; una charla corta tarda < 6 s.
+9. **[Pendiente] Overlay y bandeja** — **N** (+ arte propio). Proceso PySide6 aparte, estados, arrastrable, ⚠ junto al ratón, desactivable desde la bandeja; después, mini reproductor y skins. Hito: Diogenes reacciona a cada estado con < 3 % de CPU.
+10. **[Pendiente] Interfaz nativa** — **N+Y**. OCR de Windows con caja por palabra (clic por texto), árbol UIA resumido, ratón y teclado, selección de pantalla con OCR. Hito: una tarea dentro de una app sin protocolo ni búsqueda por URL.
+11. **[Pendiente] Trabajos y vigilancia** — **N**. Cola de trabajos con panel de pasos, hablarle a mitad, aviso si la pantalla no cambia; `watch_for` por diferencia de capturas + OCR + condición en código. Hito: «avísame cuando acabe la descarga» sin llamar al modelo en cada vistazo.
+12. **[Pendiente] Telegram desde el móvil** — **Y**. Bot propio (no el de clase), lista de chat IDs, confirmaciones por botones y `/parar`. Hito: abrir y cerrar algo desde el móvil con la ⚠ en botones.
+13. **[Pendiente] Husk** — **N**. Endpoint local con token y hooks de Claude Code, Codex y OpenCode con copia de seguridad, sin pisar los del usuario; solo observa y avisa. Hito: Diogenes avisa de que Claude Code pide permiso.
+14. **[Pendiente] Nube como planificador opcional** — **Y**. Solo en modo personal: `OpenAICompatProvider` desactivado por defecto, caída a local, filtro de datos. Hito: la misma orden con y sin red; sin red no se rompe.
+15. **[Pendiente] Wake word propia «Diógenes»** — **Y**. Hito: se activa sin teclas con menos de un falso positivo por hora.
+16. **[Pendiente] Visión** — **N+Y**. `screen.look` como último recurso, avisando de que tarda. Hito: una tarea que solo se resuelve viendo.
+17. **[Pendiente] Plugins y skins** — **N**. Plugins como servidores MCP aparte con manifiesto de permisos y hash aprobado (sus herramientas preguntan por defecto); skins como carpetas de sprites sin código. Hito: un plugin de ejemplo que pregunta antes de su primera acción.
 
-## Personaje (opcional, fase 8)
+Fuera de plan: relay cifrado propio (se usa Telegram), modo llamada de Discord, comentar partidas, minijuegos y usar Claude Code o Codex como cerebro. Los clips, como mucho, un atajo del router.
+
+## Personaje (opcional, fase 9)
 
 Inspiración: un compañero de escritorio que reacciona a lo que hace el agente. Para Diogenes, sin copiar a ningún personaje existente, con estética propia (el filósofo cínico de la tinaja, la lámpara):
 
@@ -225,6 +304,7 @@ Todo el overlay es opcional y se desactiva desde la bandeja del sistema.
 
 ## Cómo trabajar en este repo (para Claude Code)
 
+- **Capri Desktop** (`lachydotmcg/capri-desktop`) es solo referencia de diseño: licencia PolyForm Noncommercial con *Required Notice* y arte de un artista privado. No se copia ni código ni assets; si se lee, se clona fuera del repo.
 - **Antes de programar una función para una app concreta, pregúntate si debería ser una receta aprendida o una herramienta genérica.** Casi siempre es lo segundo.
 - Código específico de Windows detrás de `sys.platform == "win32"`, para que los tests puedan correr en Linux con dobles de prueba.
 - Tests en `tests/` para el índice de apps (con fixtures de `.acf`, `.vdf`, `.item` y la salida de `Get-StartApps`), el router, las recetas y `site_search`. El bucle del agente se prueba con un `LLMProvider` falso que devuelve llamadas a herramientas predefinidas.
