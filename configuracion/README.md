@@ -51,3 +51,6 @@ Frases que el router (`core/router.py`) resuelve sin LLM: teclas multimedia y vo
 - `DIOGENES_INDEX_CACHE_MINUTES` (10): cuánto vale la caché del índice de apps en `data/apps-index.json`.
 - `DIOGENES_INDEX_CACHE`: ruta alternativa de esa caché.
 - `DIOGENES_OLLAMA_KEEP_ALIVE` (30m): cuánto mantiene Ollama el modelo cargado tras la última llamada (en core, no en hands). Con el valor por defecto de Ollama (5 min), la primera petición tras una pausa tarda ~85 s en la CPU del aula.
+- `DIOGENES_OLLAMA_NUM_THREAD` (6): hilos de CPU para el modelo (en core); `0` deja que decida Ollama. En el PC de clase, los hilos que elige Ollama leen el prompt a ~33 tok/s y 6 hilos a 53–66 tok/s. Cambiarlo recarga el modelo.
+- `DIOGENES_OLLAMA_NUM_CTX` (8192): ventana de contexto fija (en core); cambiarla recarga el modelo. 4096 todavía no cabe: el prompt de sistema y las herramientas ya suman ~4000 tokens y Ollama rechaza la petición. Ver `modelos/latencia.md`.
+- `DIOGENES_PRECARGA` (1): al arrancar, el CLI carga el modelo y deja el prompt de sistema y las herramientas en la caché de Ollama en segundo plano; `0` la desactiva.
