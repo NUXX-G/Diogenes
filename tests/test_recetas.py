@@ -331,3 +331,54 @@ async def test_los_turnos_con_pasos_del_navegador_no_se_aprenden_solos() -> None
         await agent.run("abre el canal Hrom en youtube")
         await agent.run("gracias")
     assert store.all() == []
+
+
+# --- palabras sobrantes y duplicados ------------------------------------------------------------------------------
+
+BUSCAR = '{"ok": true}'
+
+
+def test_las_palabras_que_ningun_paso_usa_quedan_opcionales() -> None:
+    r = receta(
+        "busca gatos en youtube en modo incognito",
+        Recorded("web.site_search", {"sitio": "youtube", "consulta": "gatos"}, BUSCAR),
+    )
+    assert r.trigger == "<busc*> {consulta} en {sitio} [en modo incognito]"
+    assert casa(r.trigger, "busca perros en youtube") == {"consulta": "perros", "sitio": "youtube"}
+    assert casa(r.trigger, "busca perros en youtube en modo incognito") == {"consulta": "perros", "sitio": "youtube"}
+
+
+def test_una_receta_fija_sin_nada_que_la_ancle_no_se_vuelve_toda_opcional() -> None:
+    r = receta("pon la música de estudio", Recorded("uri.open", {"uri": "spotify:playlist:1"}, BUSCAR))
+    assert "[" not in r.trigger and casa(r.trigger, "pon") is None
+
+
+def test_no_se_crean_duplicados_con_palabras_de_mas() -> None:
+    store = RecipeStore(":memory:")
+    paso = Recorded("web.site_search", {"sitio": "youtube", "consulta": "perros"}, BUSCAR)
+    corta = store.save(receta("busca perros en youtube", paso))
+    gatos = Recorded("web.site_search", {"sitio": "youtube", "consulta": "gatos"}, BUSCAR)
+    larga = build_recipe("busca gatos en youtube ya mismo", [gatos], GATE.verb_root, CFG)
+    assert larga is not None and store.save(larga) == corta and len(store.all()) == 1
+
+
+def test_al_abrir_la_base_se_fusionan_los_duplicados_que_ya_hubiera(tmp_path: Any) -> None:
+    db = tmp_path / "d.db"
+    store = RecipeStore(db)
+    paso = [RecipeStep("web.site_search", {"sitio": "{sitio}", "consulta": "{consulta}"})]
+    # como en el PC de clase: la 2 se creó antes de que hubiera palabras opcionales
+    store._db.execute(
+        "INSERT INTO recipes (trigger, example, steps, successes) VALUES (?, ?, ?, 1), (?, ?, ?, 2)",
+        (
+            "<busc*> {consulta} en {sitio} en modo incognito",
+            "busca gatos en youtube en modo incognito",
+            json.dumps([s.as_dict() for s in paso]),
+            "<busc*> {consulta} en {sitio}",
+            "busca perros en youtube",
+            json.dumps([s.as_dict() for s in paso]),
+        ),
+    )
+    store._db.commit()
+    store.close()
+    (unica,) = RecipeStore(db).all()
+    assert unica.trigger == "<busc*> {consulta} en {sitio} [en modo incognito]" and unica.successes == 3

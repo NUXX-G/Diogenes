@@ -121,18 +121,70 @@ def _find_span(tokens: list[Token], value: str, taken: set[int]) -> tuple[int, i
     return None
 
 
+# Palabras que dan forma a una orden sin ser datos: se quedan en el disparador aunque ningún paso las use.
+STRUCTURE = ARTICLES | frozenset({"en", "de", "a", "con", "para", "por", "y", "mi", "mis"})
+
+
+def pieces_of(trigger: str) -> list[tuple[str, int | None]]:
+    """Las palabras del disparador con el grupo opcional al que pertenecen: «en {sitio} [en modo incognito]»."""
+    out: list[tuple[str, int | None]] = []
+    group: int | None = None
+    count = 0
+    for raw in trigger.split(" "):
+        word = raw
+        if word.startswith("["):
+            count += 1
+            group, word = count, word[1:]
+        closing = word.endswith("]")
+        word = word.rstrip("]")
+        if word:
+            out.append((word, group))
+        if closing:
+            group = None
+    return out
+
+
+def core_of(trigger: str) -> str:
+    """El disparador sin sus partes opcionales."""
+    return " ".join(w for w, g in pieces_of(trigger) if g is None)
+
+
+def _join(pieces: list[tuple[str, int | None]]) -> str:
+    out: list[str] = []
+    for i, (word, group) in enumerate(pieces):
+        prev = pieces[i - 1][1] if i else None
+        nxt = pieces[i + 1][1] if i + 1 < len(pieces) else None
+        text = word
+        if group is not None and prev != group:
+            text = "[" + text
+        if group is not None and nxt != group:
+            text += "]"
+        out.append(text)
+    return " ".join(out)
+
+
 def _slot_regex(trigger: str) -> re.Pattern[str]:
-    pieces = trigger.split(" ")
+    pieces = pieces_of(trigger)
     parts: list[str] = []
-    for i, piece in enumerate(pieces):
-        slot = SLOT.fullmatch(piece)
-        if slot is None:
-            parts.append(re.escape(piece) + " ")
+    articles = "|".join(sorted(ARTICLES))
+    i = 0
+    while i < len(pieces):
+        word, group = pieces[i]
+        if group is not None:
+            run = []
+            while i < len(pieces) and pieces[i][1] == group:
+                run.append(re.escape(pieces[i][0]) + " ")
+                i += 1
+            parts.append("(?:" + "".join(run) + ")?")
             continue
-        nxt_is_slot = i + 1 < len(pieces) and SLOT.fullmatch(pieces[i + 1]) is not None
-        body = r"\S+" if nxt_is_slot else r"\S+(?: \S+)*?"
-        articles = "|".join(sorted(ARTICLES))
-        parts.append(f"(?:(?:{articles}) )?(?P<{slot.group(1)}>{body}) ")
+        slot = SLOT.fullmatch(word)
+        if slot is None:
+            parts.append(re.escape(word) + " ")
+        else:
+            nxt = next((w for w, g in pieces[i + 1 :] if g is None), None)
+            body = r"\S+" if nxt is not None and SLOT.fullmatch(nxt) else r"\S+(?: \S+)*?"
+            parts.append(f"(?:(?:{articles}) )?(?P<{slot.group(1)}>{body}) ")
+        i += 1
     return re.compile("^" + "".join(parts) + "$")
 
 
@@ -166,7 +218,7 @@ def match_trigger(trigger: str, tokens: list[Token], words: list[str]) -> dict[s
 
 
 def literal_count(trigger: str) -> int:
-    return sum(1 for p in trigger.split(" ") if not SLOT.fullmatch(p))
+    return sum(1 for w, g in pieces_of(trigger) if g is None and not SLOT.fullmatch(w))
 
 
 # --- páginas: selectores estables en vez de refs -------------------------------------------------------------------
@@ -341,6 +393,10 @@ class Recipe:
         return SLOT.findall(self.trigger)
 
 
+def _steps_key(recipe: Recipe) -> str:
+    return json.dumps([s.as_dict() for s in recipe.steps], sort_keys=True, ensure_ascii=False)
+
+
 def fill_text(text: str, values: dict[str, str]) -> str:
     return SLOT.sub(lambda m: values.get(m.group(1), m.group(0)), text)
 
@@ -509,7 +565,65 @@ def build_recipe(
         else:
             pieces.append(tokens[i].canon)
             i += 1
-    return Recipe(" ".join(pieces), phrase.strip(), steps, origin)
+    trigger = " ".join(pieces)
+    if origin == "auto":  # en una enseñada, la frase la eligió el usuario palabra por palabra
+        trigger = _optional_surplus(trigger, steps)
+    return Recipe(trigger, phrase.strip(), steps, origin)
+
+
+def _optional_surplus(trigger: str, steps: list[RecipeStep]) -> str:
+    """Las palabras que no son verbo, hueco, conector ni algo que use algún paso («en modo incognito» si ningún paso
+    trata el modo incógnito) pasan a ser opcionales: la receta vale con ellas y sin ellas."""
+    used = {w for s in steps for v in s.args.values() if isinstance(v, str) for w in normalize(v).split()}
+    words = trigger.split(" ")
+
+    def surplus(w: str) -> bool:
+        return not (w.startswith("<") or SLOT.fullmatch(w) or w in STRUCTURE or w in used)
+
+    marks = [surplus(w) for w in words]
+    for i, w in enumerate(words):  # los conectores pegados a una palabra sobrante van con ella
+        if not marks[i] and w in STRUCTURE:
+            j = i
+            while j < len(words) and words[j] in STRUCTURE and not marks[j]:
+                j += 1
+            if j < len(words) and marks[j]:
+                for k in range(i, j):
+                    marks[k] = True
+    if all(marks[i] for i, w in enumerate(words) if not w.startswith("<") and not SLOT.fullmatch(w)) and not any(
+        SLOT.fullmatch(w) for w in words
+    ):
+        return trigger  # sin huecos y sin nada que la ancle: todo opcional la haría saltar con cualquier frase
+    pieces: list[tuple[str, int | None]] = []
+    group, current = 0, None
+    for w, optional in zip(words, marks, strict=True):
+        if optional:
+            if current is None:
+                group += 1
+                current = group
+            pieces.append((w, current))
+        else:
+            current = None
+            pieces.append((w, None))
+    return _join(pieces)
+
+
+def merged_trigger(short: str, long: str) -> str | None:
+    """Si `long` es `short` con palabras de más (y nada menos), `short` con esas palabras como opcionales."""
+    a, b = [w for w, _ in pieces_of(short)], pieces_of(long)
+    out: list[tuple[str, int | None]] = []
+    i, group, current = 0, 100, None
+    for word, _g in b:
+        if i < len(a) and word == a[i]:
+            out.append((word, pieces_of(short)[i][1]))
+            i, current = i + 1, None
+        elif SLOT.fullmatch(word) or word.startswith("<"):
+            return None  # sobra un hueco o un verbo: no es la misma orden
+        else:
+            if current is None:
+                group += 1
+                current = group
+            out.append((word, current))
+    return _join(out) if i == len(a) else None
 
 
 def _with_slots(value: str, slots: dict[str, str]) -> str:
@@ -577,6 +691,37 @@ class RecipeStore:
         self._db = sqlite3.connect(str(path))
         self._db.executescript(_SCHEMA)
         self._db.commit()
+        self.merge_duplicates()
+
+    def merge_duplicates(self) -> int:
+        """Fusiona recetas con los mismos pasos cuyo disparador es el de otra con palabras de más («busca {consulta} en
+        {sitio} en modo incognito» y «busca {consulta} en {sitio}»): queda una, con esas palabras opcionales y las
+        estadísticas sumadas. Devuelve cuántas se han fusionado."""
+        merged = 0
+        changed = True
+        while changed:
+            changed = False
+            recipes = self.all()
+            for a in recipes:
+                for b in recipes:
+                    if a.id == b.id or _steps_key(a) != _steps_key(b):
+                        continue
+                    trigger = merged_trigger(a.trigger, b.trigger)
+                    if trigger is None:
+                        continue
+                    self._db.execute("DELETE FROM recipes WHERE id = ?", (b.id,))
+                    self._db.execute(
+                        "UPDATE recipes SET trigger = ?, successes = successes + ?, failures = failures + ? "
+                        "WHERE id = ?",
+                        (trigger, b.successes, b.failures, a.id),
+                    )
+                    self._db.commit()
+                    merged += 1
+                    changed = True
+                    break
+                if changed:
+                    break
+        return merged
 
     def close(self) -> None:
         self._db.close()
@@ -598,7 +743,19 @@ class RecipeStore:
         return next((r for r in self.all() if r.id == recipe_id), None)
 
     def save(self, recipe: Recipe) -> int:
-        """Guarda la receta; si ya había una con el mismo disparador, la sustituye con las estadísticas a cero."""
+        """Guarda la receta; si ya había una con el mismo disparador, la sustituye con las estadísticas a cero. Si ya
+        hay una con los mismos pasos y el mismo disparador salvo palabras de más, no se duplica: se fusionan."""
+        for old in self.all():
+            if old.trigger != recipe.trigger and _steps_key(old) == _steps_key(recipe):
+                trigger = merged_trigger(old.trigger, recipe.trigger) or merged_trigger(recipe.trigger, old.trigger)
+                if trigger is not None:
+                    self._db.execute(
+                        "UPDATE recipes SET trigger = ?, successes = successes + 1, streak = 0, enabled = 1 "
+                        "WHERE id = ?",
+                        (trigger, old.id),
+                    )
+                    self._db.commit()
+                    return int(old.id)  # type: ignore[arg-type]
         steps = json.dumps([s.as_dict() for s in recipe.steps], ensure_ascii=False)
         self._db.execute(
             "INSERT INTO recipes (trigger, example, steps, origin, successes) VALUES (?, ?, ?, ?, 1) "
