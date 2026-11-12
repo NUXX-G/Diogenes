@@ -365,3 +365,29 @@ async def test_si_ante_varias_opciones_vuelve_a_preguntar_sin_llamar_al_modelo()
         # la lista sigue pendiente: ahora sí se puede elegir
         r = await agente.run("el primero")
     assert r.answer.startswith("He abierto Discord") and len(llm.seen) == 2
+
+
+class WarmLLM(FakeLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.warmed: list[tuple[list[Message], list[ToolSpec]]] = []
+
+    async def warm(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        self.warmed.append((list(messages), tools))
+        return LLMResponse("")
+
+
+async def test_precarga_con_el_mismo_principio_de_prompt_que_la_primera_orden() -> None:
+    from core.agent import SYSTEM_PROMPT
+
+    llm = WarmLLM()
+    backend = FakeBackend()
+    segundos = await Agent(llm, backend, policy=POLICY).warm()
+    assert segundos is not None and not backend.calls and llm.seen == []  # no cuenta como turno ni toca el PC
+    mensajes, herramientas = llm.warmed[0]
+    assert mensajes[0] == Message("system", SYSTEM_PROMPT)
+    assert [t.name for t in herramientas] == ["apps_search", "apps_launch"]  # todas y en su orden
+
+
+async def test_sin_precarga_si_el_proveedor_no_sabe_hacerla() -> None:
+    assert await Agent(FakeLLM(), FakeBackend(), policy=POLICY).warm() is None

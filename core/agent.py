@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from core.choices import Option, PendingChoice, ask_again, is_affirmation, parse_options, resolve
 from core.intent import ID_LIKE, IntentGate
-from core.llm.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
+from core.llm.base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec, WarmableLLM
 from core.mcp_client import ToolBackend
 from core.metrics import ModelCall, Stopwatch, ToolTiming, TurnMetrics
 from core.recipes import (
@@ -856,6 +856,18 @@ class Agent:
             )
         )
         return response
+
+    async def warm(self) -> float | None:
+        """Precarga el modelo con el mismo principio de prompt que usará la primera orden (prompt de sistema y
+        herramientas en su orden) y devuelve los segundos que tardó, o None si el proveedor no sabe precargar."""
+        if not isinstance(self._llm, WarmableLLM):
+            return None
+        specs, to_mcp = _wire_names(await self._backend.tools())
+        clock = Stopwatch()
+        await self._llm.warm(
+            [Message("system", SYSTEM_PROMPT), Message("user", "hola")], self._selector.select(specs, to_mcp, "")
+        )
+        return clock.seconds()
 
     async def _call(self, name: str, arguments: dict[str, Any]) -> str:
         clock = Stopwatch()

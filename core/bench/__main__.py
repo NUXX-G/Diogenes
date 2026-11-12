@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,7 @@ from typing import Any
 from core.agent import SYSTEM_PROMPT, Agent, _wire_names
 from core.bench.fakes import APPS, FakePC
 from core.bench.sim import ORDERS, TEACH_PHRASE, TEACH_STEPS, Director, Order, SimulatedLLM, scripted
-from core.llm.base import LLMProvider, Message
+from core.llm.base import LLMProvider, Message, WarmableLLM
 from core.mcp_client import McpTools
 from core.recipes import RecipeStore
 from core.safety import ConfirmationPolicy
@@ -61,7 +60,8 @@ async def run(
     async with _client(pc) as client:
         if warm and real is not None:  # deja el prompt de sistema y las herramientas en la caché de Ollama
             specs, _ = _wire_names(await McpTools(client).tools())
-            await real.chat([Message("system", SYSTEM_PROMPT), Message("user", "hola")], specs)
+            prime = real.warm if isinstance(real, WarmableLLM) else real.chat
+            await prime([Message("system", SYSTEM_PROMPT), Message("user", "hola")], specs)
         store = RecipeStore(":memory:") if recipes or teach else None
         if teach and store is not None:
             await _teach(McpTools(client), store)
@@ -156,13 +156,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.real:
         from dotenv import load_dotenv
 
-        from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_MODEL, OllamaProvider
+        from core.llm.ollama import OllamaProvider
 
         load_dotenv()
-        real = OllamaProvider(
-            os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
-            os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
-        )
+        real = OllamaProvider.from_env()  # la misma configuración que el CLI (hilos, num_ctx, keep_alive)
     rows = asyncio.run(
         run(
             real=real,

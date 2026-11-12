@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 class LLMError(Exception):
@@ -53,3 +53,10 @@ class LLMResponse:
 
 class LLMProvider(Protocol):
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
+
+
+@runtime_checkable
+class WarmableLLM(Protocol):
+    """Un proveedor que sabe precargar el modelo y un prefijo del prompt sin generar una respuesta entera."""
+
+    async def warm(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
