@@ -88,6 +88,8 @@ class OllamaProvider:
             int(data.get("prompt_eval_count") or 0),
             int(data.get("eval_count") or 0),
             float(data.get("load_duration") or 0) / 1e9,
+            float(data.get("prompt_eval_duration") or 0) / 1e9,
+            float(data.get("eval_duration") or 0) / 1e9,
         )
         return LLMResponse(message.get("content") or "", calls, usage)
 

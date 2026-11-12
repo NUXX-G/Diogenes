@@ -1,7 +1,8 @@
 """LLM simulado para medir sin GPU ni Ollama: sigue un guion por orden y calcula cuánto habría tardado.
 
-Modelo de latencia, calibrado con lo medido el 2026-11-10 en el PC del aula (CPU, 6 hilos, qwen3:4b-instruct cargado:
-~5 s el primer paso y ~10 s el segundo):
+Modelo de latencia, calibrado el 2026-11-12 en el PC del aula (CPU, 6 hilos, qwen3:4b-instruct cargado) con
+`prompt_eval_duration` y `eval_duration` de Ollama: leer el prompt va a ~33 tokens/s (3708 tokens en frío: 113 s; el
+mismo prefijo en caché: 0,3 s) y generar a ~3,4 tokens/s (21 tokens: 6,4 s).
 
     segundos = SOBRECARGA + tokens_nuevos / VELOCIDAD_PROMPT + tokens_generados / VELOCIDAD_GENERACION
 
@@ -19,9 +20,9 @@ from dataclasses import dataclass, field
 
 from core.llm.base import LLMResponse, LLMUsage, Message, ToolCall, ToolSpec
 
-OVERHEAD_SECONDS = 0.4
-PROMPT_TOKENS_PER_SECOND = 45.0
-OUTPUT_TOKENS_PER_SECOND = 7.5
+OVERHEAD_SECONDS = 0.3
+PROMPT_TOKENS_PER_SECOND = 33.0
+OUTPUT_TOKENS_PER_SECOND = 3.4
 CHARS_PER_TOKEN = 3.5
 
 Policy = Callable[[list[Message], list[ToolSpec]], LLMResponse]
@@ -86,10 +87,12 @@ class SimulatedLLM:
         out = output_text(response)
         new = tokens(prompt[_common_prefix(prompt, self._cached) :])
         produced = max(1, tokens(out))
-        seconds = OVERHEAD_SECONDS + new / PROMPT_TOKENS_PER_SECOND + produced / OUTPUT_TOKENS_PER_SECOND
+        reading, writing = new / PROMPT_TOKENS_PER_SECOND, produced / OUTPUT_TOKENS_PER_SECOND
+        seconds = OVERHEAD_SECONDS + reading + writing
         self.calls.append(SimCall(tokens(prompt), new, produced, seconds, len(tools)))
         self._cached = prompt + out
-        return LLMResponse(response.content, response.tool_calls, LLMUsage(new, produced))
+        usage = LLMUsage(tokens(prompt), produced, prompt_seconds=reading, output_seconds=writing)
+        return LLMResponse(response.content, response.tool_calls, usage)
 
     @property
     def seconds(self) -> float:

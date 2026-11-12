@@ -21,10 +21,12 @@ ROUTES = ("atajo", "receta", "eleccion", "planificador", "comando")
 @dataclass
 class ModelCall:
     seconds: float
-    input_tokens: int = 0  # evaluados de verdad (sin la parte que Ollama ya tenía en caché)
+    input_tokens: int = 0  # todo el prompt (Ollama los cuenta aunque salgan de su caché)
     output_tokens: int = 0
     tools_sent: int = 0  # cuántas herramientas se le enseñaron
     load_seconds: float = 0.0
+    prompt_seconds: float = 0.0  # leer lo que no estaba en caché
+    output_seconds: float = 0.0  # generar
 
 
 @dataclass
@@ -66,12 +68,15 @@ class Stopwatch:
 
 
 def describe(m: TurnMetrics) -> str:
-    """Una línea para el CLI: `⏱ planificador · modelo 2× 14.1 s (1830→41 tok) · herramientas 2× 0.4 s · total 14.6 s`."""
+    """Una línea para el CLI: `⏱ planificador · modelo 2× 14.1 s (3700→41 tok; prompt 5.3 s, generar 8.6 s) · ...`."""
     parts = [f"⏱ {m.route}"]
     if m.model_calls:
         tin = sum(c.input_tokens for c in m.model_calls)
         tout = sum(c.output_tokens for c in m.model_calls)
-        tokens = f" ({tin}→{tout} tok)" if tin or tout else ""
+        reading = sum(c.prompt_seconds for c in m.model_calls)
+        writing = sum(c.output_seconds for c in m.model_calls)
+        split = f"; prompt {reading:.1f} s, generar {writing:.1f} s" if reading or writing else ""
+        tokens = f" ({tin}→{tout} tok{split})" if tin or tout else ""
         load = sum(c.load_seconds for c in m.model_calls)
         cold = f" · carga en frío {load:.1f} s" if load >= 1 else ""
         parts.append(f"modelo {len(m.model_calls)}× {m.model_seconds:.1f} s{tokens}{cold}")

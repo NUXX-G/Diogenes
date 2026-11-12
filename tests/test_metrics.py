@@ -27,12 +27,14 @@ async def test_ollama_devuelve_tokens_evaluados_generados_y_carga_en_frio() -> N
                 "prompt_eval_count": 1830,
                 "eval_count": 41,
                 "load_duration": 85_000_000_000,
+                "prompt_eval_duration": 4_800_000_000,
+                "eval_duration": 12_000_000_000,
             },
         )
 
     llm = OllamaProvider("http://ollama.test", "m", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     respuesta = await llm.chat([Message("user", "hola")], [])
-    assert respuesta.usage == LLMUsage(1830, 41, 85.0)
+    assert respuesta.usage == LLMUsage(1830, 41, 85.0, 4.8, 12.0)
 
 
 async def test_ollama_fija_num_ctx_configurable() -> None:

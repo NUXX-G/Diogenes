@@ -23,6 +23,7 @@ from core.bench.sim import ORDERS, Director, Order
 from core.llm.base import LLMProvider
 from core.mcp_client import McpTools
 from core.safety import ConfirmationPolicy
+from core.toolsets import ALL, ToolSelector
 
 CALC = APPS[1]
 
@@ -40,6 +41,7 @@ async def run(
     real: LLMProvider | None = None,
     passes: int = 2,
     prepare: Any = None,
+    toolset: str = ALL,
 ) -> list[dict[str, Any]]:
     """Ejecuta las órdenes `passes` veces en una misma sesión y devuelve una fila por orden y pasada."""
     director = Director()
@@ -53,7 +55,9 @@ async def run(
         return True
 
     async with _client(pc) as client:
-        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), confirm=yes)
+        agent = Agent(
+            llm, McpTools(client), policy=ConfirmationPolicy.load(), confirm=yes, toolset=ToolSelector.load(toolset)
+        )
         if prepare is not None:
             await prepare(agent, director, pc)
         for n in range(1, passes + 1):
@@ -114,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--real", action="store_true", help="usa Ollama de verdad (el PC sigue siendo falso)")
     parser.add_argument("--pasadas", type=int, default=2)
     parser.add_argument("--salida", type=Path, help="guarda las filas en JSON")
+    parser.add_argument("--herramientas", default=ALL, choices=("todas", "relevantes"), help="qué herramientas ve")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 por defecto
@@ -128,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
             os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
         )
-    rows = asyncio.run(run(real=real, passes=args.pasadas))
+    rows = asyncio.run(run(real=real, passes=args.pasadas, toolset=args.herramientas))
     print(table(rows))
     for r in rows:
         print(f"- {r['orden']} (pasada {r['pasada']}): {r['herramientas']} → {r['respuesta'][:120]!r}")
