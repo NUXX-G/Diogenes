@@ -664,6 +664,7 @@ class Agent:
         self._last_recipe: int | None = None  # receta reproducida en el turno anterior
         self._used_alias: str | None = None  # alias usado en el turno anterior
         self._teaching: tuple[str, list[Recorded]] | None = None  # /aprender: frase y pasos grabados
+        self._teaching_failed: list[str] = []  # frases guiadas en las que algo falló
         self._choice: tuple[PendingChoice, Option] | None = None  # la opción que acaba de elegir el usuario
         self._model_corrected = False  # _grounded tuvo que corregir la respuesta del modelo en este turno
 
@@ -1022,6 +1023,8 @@ class Agent:
             self._teaching[1].extend(
                 Recorded(s.tool, s.arguments, s.result, request, s.asked) for s in result.steps if s.ok
             )
+            if any(not s.ok and s.tool not in self._recipe_config.read_only for s in result.steps):
+                self._teaching_failed.append(request)
             return
         steps = result.steps
         if text != request or not result.finished or self._model_corrected or not steps:
@@ -1046,6 +1049,7 @@ class Agent:
         if not phrase:
             return "Dime la frase: /aprender dame el vídeo más visto del canal Hrom"
         self._teaching = (phrase, [])
+        self._teaching_failed = []
         return (
             f"Grabando «{phrase}». Guíame paso a paso con frases normales; /fin para guardarlo como receta, "
             "/cancelar para descartarlo."
@@ -1061,7 +1065,8 @@ class Agent:
             return "No he guardado nada: no hubo ningún paso que se pueda repetir."
         recipe_id = self._recipes.save(recipe)
         steps = "; ".join(s.describe() for s in recipe.steps)
-        return f"Aprendida la receta n.º {recipe_id}: «{recipe.trigger}» → {steps}"
+        failed = "".join(f"\nAviso: «{said}» no salió bien y no se ha grabado." for said in self._teaching_failed)
+        return f"Aprendida la receta n.º {recipe_id}: «{recipe.trigger}» → {steps}{failed}"
 
     def cancel_teaching(self) -> str:
         if self._teaching is None:

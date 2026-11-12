@@ -124,3 +124,15 @@ async def test_los_comandos_pasan_por_la_sesion_sin_llamar_al_modelo() -> None:
     assert salidas[0].startswith("Grabando «pon lo mío»")
     assert salidas[1:] == ["Descartado: no he guardado nada.", "No hay recetas aprendidas."]
     assert llm.seen == []
+
+
+async def test_fin_avisa_de_los_pasos_guiados_que_no_salieron_bien() -> None:
+    store = RecipeStore(":memory:")
+    llm = FakeLLM(llamar("apps_open", nombre="Spotify"), llamar("browser_click", ref="e99"), decir("Hecho."))
+    async with Client(FakePC().server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        agent.command("/aprender pon lo mío")
+        await agent.run("abre Spotify")
+        await agent.run("pulsa el botón raro")
+        fin = agent.command("/fin")
+    assert fin is not None and fin.endswith("Aviso: «pulsa el botón raro» no salió bien y no se ha grabado.")
