@@ -17,10 +17,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.agent import Agent
+from core.agent import SYSTEM_PROMPT, Agent, _wire_names
 from core.bench.fakes import APPS, FakePC
 from core.bench.sim import ORDERS, TEACH_PHRASE, TEACH_STEPS, Director, Order, SimulatedLLM, scripted
-from core.llm.base import LLMProvider
+from core.llm.base import LLMProvider, Message
 from core.mcp_client import McpTools
 from core.recipes import RecipeStore
 from core.safety import ConfirmationPolicy
@@ -45,6 +45,7 @@ async def run(
     toolset: str = ALL,
     recipes: bool = False,
     teach: bool = False,
+    warm: bool = False,
 ) -> list[dict[str, Any]]:
     """Ejecuta las órdenes `passes` veces en una misma sesión y devuelve una fila por orden y pasada."""
     director = Director()
@@ -58,6 +59,9 @@ async def run(
         return True
 
     async with _client(pc) as client:
+        if warm and real is not None:  # deja el prompt de sistema y las herramientas en la caché de Ollama
+            specs, _ = _wire_names(await McpTools(client).tools())
+            await real.chat([Message("system", SYSTEM_PROMPT), Message("user", "hola")], specs)
         store = RecipeStore(":memory:") if recipes or teach else None
         if teach and store is not None:
             await _teach(McpTools(client), store)
@@ -144,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--herramientas", default=ALL, choices=("todas", "relevantes"), help="qué herramientas ve")
     parser.add_argument("--recetas", action="store_true", help="con recetas y alias (base en memoria)")
     parser.add_argument("--ensenar", action="store_true", help="enseña antes la receta de Hrom con /aprender")
+    parser.add_argument("--calentar", action="store_true", help="con --real, una llamada previa que no cuenta")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 por defecto
@@ -159,7 +164,14 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
         )
     rows = asyncio.run(
-        run(real=real, passes=args.pasadas, toolset=args.herramientas, recipes=args.recetas, teach=args.ensenar)
+        run(
+            real=real,
+            passes=args.pasadas,
+            toolset=args.herramientas,
+            recipes=args.recetas,
+            teach=args.ensenar,
+            warm=args.calentar,
+        )
     )
     print(table(rows))
     for r in rows:
