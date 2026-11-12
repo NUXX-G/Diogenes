@@ -108,3 +108,39 @@ Notas: el modelo real cerró la calculadora con dos llamadas a `apps.close` (la 
 turno no cumple «todo salió bien» y no se aprendió: en la 2.ª pasada vuelve al planificador. Esos 53,6 s incluyen un
 recorte del historial (relee la conversación una vez). La enseñanza de Hrom en el banco la hace un guion simulado; con el
 canal real queda como prueba manual.
+
+## Segunda ronda (recetas robustas, páginas cortas, uso)
+
+### Simulada, seis órdenes (se añade «dame el vídeo más visto del canal Lofi Girl», enseñada con Hrom)
+
+En el sitio falso, el enlace al canal de Hrom dice «Ir al canal Hrom» y el de Lofi Girl es su perfil
+«@LofiGirl · 1,5 M de suscriptores», como pasó en el aula.
+
+| Pasada | Orden | Antes · llamadas · tiempo | Después |
+|---|---|---|---|
+| 1 | dame el vídeo más visto del canal Lofi Girl | planificador · 5 · 96,3 s (la receta falló en el paso 2) | **receta · 0** |
+| 2 | dame el vídeo más visto del canal Lofi Girl | planificador · 5 · 126,1 s | **receta · 0** |
+| | **Total de las 12** | **14 · 388,3 s** | **4 · 181,9 s** |
+
+Coste nuevo: `apps.abiertas` y su línea en el prompt suman ~200 tokens al prompt de sistema. La primera orden en
+frío sube de 127 s a 133 s y «pausa el vídeo» de 15 s a 25 s (se relee lo que viene después de las herramientas).
+
+### Páginas más cortas (planificador, sin recetas, páginas tan largas como las de YouTube)
+
+| Orden (pasada 1) | Antes · llamadas · tiempo | Páginas recortadas y búsqueda con página |
+|---|---|---|
+| dame el vídeo más visto del canal Hrom | 7 · 149,2 s | 6 · 109,8 s |
+| dame el vídeo más visto del canal Lofi Girl | 7 · 156,1 s | 6 · 103,4 s |
+| Total de las 12 órdenes (2 pasadas) | 36 · 876,8 s | 32 · 690,4 s |
+
+### Real (`qwen3:4b-instruct`, `--calentar`, recetas, Hrom enseñada; seis órdenes, dos pasadas)
+
+| | Llamadas al modelo | Tiempo | Lofi Girl |
+|---|---|---|---|
+| Antes de esta ronda (primera ronda, cinco órdenes) | 5 | 112,6 s | no estaba; en el aula la receta fallaba en el paso 2 |
+| Después | 6 | 139,6 s | **receta, 0 llamadas, en las dos pasadas** |
+| Después, solo la 2.ª pasada | **0** | 0 s de modelo | receta |
+
+En la 1.ª pasada el modelo real miró si la calculadora estaba abierta antes de cerrarla (2 llamadas, 40,6 s) y listó
+las sesiones antes de pausar (2 llamadas, 71,3 s). Al primer intento de esta medición, mirar con `apps.abiertas` se
+daba por respuesta y no cerraba: corregido y medido otra vez (esta tabla es la segunda medición).
