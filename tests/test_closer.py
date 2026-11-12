@@ -19,7 +19,7 @@ from hands.apps.index import AppIndex
 from hands.apps.models import AppEntry
 from hands.system.closer import AppCloser, CloseConfig, matches
 from hands.system.windows import Win
-from tests.test_agent import FakeLLM, decir, llamar
+from tests.test_agent import FakeBackend, FakeLLM, decir, llamar
 
 NOTEPAD = AppEntry(
     "startapps:bloc", "Bloc de notas", "startapps", "shell", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
@@ -133,11 +133,18 @@ def test_app_que_no_esta_abierta() -> None:
 # --- forzar ----------------------------------------------------------------------------------------------------
 
 
-def test_no_se_puede_forzar_sin_haber_intentado_el_cierre_suave() -> None:
+def test_forzar_sin_cierre_suave_previo_lo_intenta_antes_y_solo_fuerza_si_sigue_abierta() -> None:
+    """El usuario ya confirmó forzar: primero se pide cerrar como con la X (deja guardar) y solo si sigue, se fuerza."""
     windows = FakeWindows(bloc(), ignora_cierre=True)
     res = closer(windows).force_close(NOTEPAD)
-    assert res["ok"] is False and "apps.close" in res["mensaje"]
-    assert windows.terminados == []
+    assert windows.cerradas == [100] and windows.terminados == [4000]
+    assert res["ok"] is True and res["forzada"] is True
+
+
+def test_forzar_algo_que_se_cierra_con_la_x_no_lo_mata() -> None:
+    windows = FakeWindows(bloc())
+    res = closer(windows).force_close(NOTEPAD)
+    assert res["cerrada"] is True and "forzada" not in res and windows.terminados == []
 
 
 def test_se_fuerza_despues_de_intentar_el_cierre_suave() -> None:
@@ -154,8 +161,10 @@ def test_forzar_gasta_el_permiso_del_cierre_suave() -> None:
     c = closer(windows)
     c.close(NOTEPAD, confirmed=True)
     c.force_close(NOTEPAD)
-    windows.windows = [bloc()]  # la app vuelve a abrirse: otro cierre suave antes de poder forzar de nuevo
-    assert c.force_close(NOTEPAD)["ok"] is False
+    windows.windows = [bloc()]  # la app vuelve a abrirse: antes de forzar de nuevo, otra vez el cierre suave
+    windows.cerradas.clear()
+    c.force_close(NOTEPAD)
+    assert windows.cerradas == [100]
 
 
 # --- protegidos ------------------------------------------------------------------------------------------------
@@ -326,7 +335,7 @@ async def test_las_herramientas_de_cierre_solo_existen_si_hay_closer() -> None:
         sin = {t.name for t in (await client.list_tools()).tools}
     async with Client(hands_server.build_server(AppIndex(), closer=closer(FakeWindows()))) as client:
         con = {t.name for t in (await client.list_tools()).tools}
-    assert con - sin == {"apps.close", "apps.force_close"}
+    assert con - sin == {"apps.close", "apps.force_close", "apps.abiertas"}
 
 
 def test_forzar_el_cierre_pide_confirmacion_aunque_el_json_del_usuario_no_lo_liste() -> None:
@@ -473,3 +482,188 @@ async def test_force_close_tambien_resuelve_por_nombre(servidor_con_bloc: Any) -
     async with Client(server) as client:
         res = json.loads((await client.call_tool("apps.force_close", {"id": "calculadora"})).content[0].text)
     assert res["ok"] is False and "no está abierta" in res["mensaje"] and windows.terminados == []
+
+
+# --- qué está abierto y cierres con un id que no es el pedido -------------------------------------------------------
+
+
+async def test_apps_abiertas_dice_si_algo_esta_abierto_y_lista_las_ventanas(servidor_con_bloc: Any) -> None:
+    server, _ = servidor_con_bloc
+    async with Client(server) as client:
+        bloc = json.loads((await client.call_tool("apps.abiertas", {"nombre": "bloc de notas"})).content[0].text)
+        paint = json.loads((await client.call_tool("apps.abiertas", {"nombre": "paint"})).content[0].text)
+        todas = json.loads((await client.call_tool("apps.abiertas", {})).content[0].text)
+    assert bloc["abierta"] is True and paint["abierta"] is False
+    assert todas["abiertas"] == [{"titulo": "Sin título - Bloc de notas", "proceso": "notepad.exe"}]
+
+
+def test_preguntar_si_esta_abierto_no_es_pedir_abrir() -> None:
+    gate = IntentGate.load()
+    gate.begin_turn("busca si hay un bloc de notas abierto")
+    assert gate.asking_state() and gate.check("apps.launch", {"id": "bloc de notas"}).blocked
+    assert gate.state_target("busca si hay un bloc de notas abierto") == "bloc de notas"
+    gate.begin_turn("abre el bloc de notas si no está abierto")
+    assert not gate.asking_state() and gate.check("apps.open", {"nombre": "bloc de notas"}).allowed
+
+
+async def test_la_pregunta_de_estado_contestada_sin_mirar_fuerza_apps_abiertas() -> None:
+    backend = FakeBackend(
+        {"apps.abiertas": json.dumps({"ok": True, "abierta": True, "mensaje": "Sí: Bloc de notas está abierta."})},
+        names=("apps.search", "apps.launch", "apps.abiertas"),
+    )
+    llm = FakeLLM(decir("No lo sé."))
+    resultado = await Agent(llm, backend, policy=ConfirmationPolicy(["apps.force_close"])).run(
+        "¿está abierto el bloc de notas?"
+    )
+    assert backend.calls == [("apps.abiertas", {"nombre": "bloc de notas"})]
+    assert resultado.answer == "Sí: Bloc de notas está abierta."
+
+
+async def test_cerrar_con_un_id_de_otra_app_del_historial_usa_el_nombre_del_mensaje(servidor_con_bloc: Any) -> None:
+    """Caso real: «cierra a la fuerza el bloc de notas» llegó con el id de Registry Editor y contestó con otro nombre."""
+    server, windows = servidor_con_bloc
+    gate = IntentGate.load()
+    gate.observe(
+        "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:paint", "nombre": "Paint"}]})
+    )
+    llm = FakeLLM(llamar("apps_close", id="startapps:paint"))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]), intent=gate)
+        resultado = await agent.run("cierra el bloc de notas")
+    assert resultado.steps[0].arguments == {"nombre": "bloc de notas"}
+    assert resultado.answer == "He cerrado Bloc de notas." and windows.windows == []
+
+
+async def test_si_el_modelo_mira_si_esta_abierta_en_vez_de_cerrar_el_turno_sigue(servidor_con_bloc: Any) -> None:
+    """Caso real (banco, 2026-11-12): «cierra la calculadora» → apps_abiertas → «Sí: está abierta», sin cerrarla."""
+    server, windows = servidor_con_bloc
+    llm = FakeLLM(llamar("apps_abiertas", nombre="bloc de notas"), llamar("apps_close", id="bloc de notas"))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]))
+        resultado = await agent.run("cierra el bloc de notas")
+    assert [s.tool for s in resultado.steps] == ["apps.abiertas", "apps.close"]
+    assert resultado.answer == "He cerrado Bloc de notas." and windows.windows == []
+
+
+# --- ronda 3: cierres por nombre, ⚠ con la app real, contradicciones y coincidencias falsas ----------------------
+
+EXPLORADOR = AppEntry(
+    "startapps:explorer", "Explorador de archivos", "startapps", "shell", "Microsoft.Windows.Explorer"
+)
+
+
+def servidor_bloc_y_explorador() -> tuple[Any, FakeWindows]:
+    index = AppIndex()
+    index.replace([NOTEPAD, EXPLORADOR, AppEntry("startapps:paint", "Paint", "startapps", "shell", "Paint!App")])
+    windows = FakeWindows(bloc(), Win(300, 900, "Descargas - Explorador de archivos", r"C:\Windows\explorer.exe"))
+    return hands_server.build_server(index, closer=closer(windows), launch=lambda _e: None), windows
+
+
+async def test_apps_abiertas_no_confunde_el_bloc_con_el_explorador_y_lo_dice_bien() -> None:
+    server, _ = servidor_bloc_y_explorador()
+    async with Client(server) as client:
+        res = json.loads((await client.call_tool("apps.abiertas", {"nombre": "bloc de notas"})).content[0].text)
+    assert res["apps"] == [{"nombre": "Bloc de notas", "ventanas": ["Sin título"]}]
+    assert res["mensaje"] == "Sí, está abierto: Bloc de notas (1 ventana: Sin título)."
+
+
+class Pregunta:
+    def __init__(self) -> None:
+        self.vistas: list[tuple[str, dict[str, Any]]] = []
+
+    async def __call__(self, tool: str, args: dict[str, Any]) -> bool:
+        self.vistas.append((tool, args))
+        return True
+
+
+async def test_forzar_con_un_id_inventado_cierra_la_app_que_se_pidio_y_la_aviso_dice_su_nombre() -> None:
+    """Caso real: apps.abiertas encontró el Bloc de notas, el modelo forzó id='app_bloc_de_nota' y dijo «no está
+    abierto»; la ⚠ enseñaba el id inventado."""
+    server, windows = servidor_bloc_y_explorador()
+    preguntas = Pregunta()
+    llm = FakeLLM(llamar("apps_abiertas", nombre="Bloc de notas"), llamar("apps_force_close", id="app_bloc_de_nota"))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]), confirm=preguntas)
+        resultado = await agent.run("cierra a la fuerza el bloc de notas")
+    assert preguntas.vistas == [("apps.force_close", {"app": "Bloc de notas", "ventanas": "Sin título"})]
+    assert resultado.answer.startswith("He cerrado Bloc de notas")
+    assert [w.title for w in windows.windows] == ["Descargas - Explorador de archivos"]  # el Explorador, intacto
+
+
+async def test_cierralo_con_un_id_inventado_cierra_la_app_de_la_que_se_hablaba() -> None:
+    server, windows = servidor_bloc_y_explorador()
+    llm = FakeLLM(
+        llamar("apps_abiertas", nombre="bloc de notas"),
+        llamar("apps_close", id="app_bloc"),
+    )
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]))
+        await agent.run("busca si hay un bloc de notas abierto")
+        resultado = await agent.run("ciérralo")
+    assert resultado.steps[0].arguments["nombre"] == "Bloc de notas"
+    assert resultado.answer == "He cerrado Bloc de notas." and len(windows.windows) == 1
+
+
+async def test_forzar_algo_que_no_esta_abierto_no_pregunta() -> None:
+    server, _ = servidor_bloc_y_explorador()
+    preguntas = Pregunta()
+    llm = FakeLLM(llamar("apps_force_close", nombre="paint"), decir("Paint no está abierto."))
+    async with Client(server) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy(["apps.force_close"]), confirm=preguntas)
+        await agent.run("cierra a la fuerza paint")
+    assert preguntas.vistas == []
+
+
+async def test_no_puede_decir_que_no_esta_abierto_si_apps_abiertas_lo_encontro() -> None:
+    abierta = json.dumps(
+        {
+            "ok": True,
+            "abierta": True,
+            "apps": [{"nombre": "Bloc de notas", "ventanas": ["Sin título"]}],
+            "mensaje": "Sí",
+        }
+    )
+    fallo = json.dumps({"ok": False, "mensaje": "«x» no está abierta"})
+    backend = FakeBackend({"apps.abiertas": abierta, "apps.close": fallo}, names=("apps.abiertas", "apps.close"))
+    llm = FakeLLM(
+        llamar("apps_abiertas", nombre="bloc de notas"), llamar("apps_close", nombre="x"), decir("No está abierto.")
+    )
+    resultado = await Agent(llm, backend, policy=ConfirmationPolicy([])).run("cierra el bloc de notas")
+    assert resultado.answer == "Bloc de notas sí está abierto (lo he comprobado), pero no he conseguido cerrarlo."
+
+
+def test_la_pregunta_de_confirmacion_dice_la_app_y_sus_ventanas_nunca_el_id() -> None:
+    from core.session import confirmation_text
+
+    texto = confirmation_text("apps.force_close", {"app": "Bloc de notas", "ventanas": "Sin título"})
+    assert texto == "¿Confirmas forzar el cierre: Bloc de notas — ventanas: Sin título?"
+    assert "startapps" not in confirmation_text("apps.close", {"id": "startapps:bloc", "nombre": "Bloc de notas"})
+
+
+async def test_el_modelo_no_ve_el_id_de_los_cierres(servidor_con_bloc: Any) -> None:
+    server, _ = servidor_con_bloc
+    llm = FakeLLM(decir("vale"))
+    async with Client(server) as client:
+        await Agent(llm, McpTools(client), policy=ConfirmationPolicy([])).run("hola")
+    cierres = {t.name: t.parameters["properties"] for t in llm.tools_seen[0] if t.name.startswith("apps_")}
+    assert "id" not in cierres["apps_close"] and "nombre" in cierres["apps_force_close"]
+
+
+async def test_preguntar_si_esta_abierto_sin_nombre_se_mira_con_el_nombre_del_mensaje() -> None:
+    """Caso real: el modelo llamó a apps_abiertas sin nombre y contestó «2 ventanas abiertas»."""
+    server, _ = servidor_bloc_y_explorador()
+    async with Client(server) as client:
+        agent = Agent(FakeLLM(llamar("apps_abiertas")), McpTools(client), policy=ConfirmationPolicy([]))
+        resultado = await agent.run("busca si hay un bloc de notas abierto")
+    assert resultado.steps[0].arguments == {"nombre": "bloc de notas"}
+    assert resultado.answer == "Sí, está abierto: Bloc de notas (1 ventana: Sin título)."
+
+
+async def test_no_puede_decir_que_ha_forzado_el_cierre_sin_haberlo_hecho() -> None:
+    """Caso real: «ciérralo» → la app pidió guardar (sigue abierta) y el modelo dijo «He forzado el cierre»."""
+    sigue = json.dumps({"ok": True, "cerrada": False, "sigue_abierta": True, "mensaje": "Bloc de notas sigue abierta."})
+    backend = FakeBackend({"apps.close": sigue}, names=("apps.close",))
+    llm = FakeLLM(llamar("apps_close", nombre="bloc de notas"), decir("Sigue abierta. He forzado el cierre del Bloc."))
+    resultado = await Agent(llm, backend, policy=ConfirmationPolicy([])).run("cierra el bloc de notas")
+    assert resultado.answer.startswith("No la he cerrado: Bloc de notas sigue abierta.")
+    assert "a la fuerza" in resultado.answer

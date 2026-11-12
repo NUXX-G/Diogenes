@@ -126,3 +126,52 @@ def test_el_prompt_prohibe_nombres_internos_y_abrir_al_cerrar() -> None:
     assert "nunca nombres tus herramientas internas" in SYSTEM_PROMPT
     assert "NUNCA llames a apps_launch" in SYSTEM_PROMPT
     assert "búscalo primero" in SYSTEM_PROMPT
+
+
+# --- bloque 6: la comprobación forzada depende de la orden -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mensaje", "esperado"),
+    [
+        ("búscame en YouTube cómo hacer mochis", ("youtube", "como hacer mochis")),
+        ("busca mochis en youtube", ("youtube", "mochis")),
+        ("busca zapatillas en amazon.es", ("amazon.es", "zapatillas")),
+        ("abre ejemplo.com", ("ejemplo.com", "")),
+        ("abre prueba nueva", None),
+        ("busca cómo hacer mochis", None),  # no dice dónde
+    ],
+)
+def test_sitio_y_consulta_de_la_orden(mensaje: str, esperado: tuple[str, str] | None) -> None:
+    assert IntentGate.load().site_request(mensaje) == esperado
+
+
+WEB = ("apps.search", "apps.launch", "web.site_search", "web.open", "media.sessions")
+
+
+async def test_si_nombra_un_sitio_se_busca_en_la_web_y_no_una_app() -> None:
+    backend = FakeBackend({"web.site_search": json.dumps({"ok": True, "url": "https://www.youtube.com/results"})}, WEB)
+    llm = FakeLLM(decir("No tengo acceso a YouTube."), decir("Ahí está."))
+    await Agent(llm, backend, policy=POLICY).run("búscame en YouTube cómo hacer mochis")
+    assert backend.calls[0] == ("web.site_search", {"sitio": "youtube", "consulta": "como hacer mochis"})
+
+
+async def test_si_da_una_url_se_abre() -> None:
+    backend = FakeBackend({}, WEB)
+    llm = FakeLLM(decir("No puedo abrir webs."), decir("Abierta."))
+    await Agent(llm, backend, policy=POLICY).run("abre ejemplo.com")
+    assert backend.calls == [("web.open", {"url": "https://ejemplo.com"})]
+
+
+async def test_si_es_multimedia_se_mira_que_suena() -> None:
+    backend = FakeBackend({}, WEB)
+    llm = FakeLLM(decir("No hay nada sonando."), decir("Suena X."))
+    await Agent(llm, backend, policy=POLICY).run("pausa la música")
+    assert backend.calls == [("media.sessions", {})]
+
+
+async def test_sin_sitio_ni_multimedia_sigue_buscando_la_app() -> None:
+    backend = FakeBackend({"apps.search": ENCONTRADA}, WEB)
+    llm = FakeLLM(decir(SIN_INFORMACION), decir("Abierta."))
+    await Agent(llm, backend, policy=POLICY).run("abre prueba nueva")
+    assert backend.calls[0] == ("apps.search", {"nombre": "prueba nueva"})

@@ -25,15 +25,16 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from hands.actionlog import ActionLog
 from hands.apps import desktop, discovery, launcher
 from hands.apps.cache import DEFAULT_PATH, DEFAULT_TTL_SECONDS, IndexCache
-from hands.apps.index import AppIndex, hay_ganador_claro
-from hands.apps.models import AppEntry
+from hands.apps.index import AppIndex, cubre, ganador_por_uso, hay_ganador_claro, nombra, por_uso
+from hands.apps.models import AppEntry, normalize
 from hands.apps.policy import LaunchPolicy
+from hands.apps.usage import UsageReader
 from hands.browser.service import BrowserService
 from hands.browser.session import DEFAULT_PORT, DEFAULT_PROFILE, BrowserSession
 from hands.system.closer import AppCloser, CloseConfig
 from hands.system.media import Media, WinKeySender
 from hands.system.sessions import Sessions, WinrtBackend
-from hands.system.windows import WinBackend
+from hands.system.windows import Win, WinBackend
 from hands.web.fetch import HttpFetcher
 from hands.web.service import WebService
 from hands.web.store import TemplateStore
@@ -83,6 +84,7 @@ def build_server(
     closer: AppCloser | None = None,
     media: Media | None = None,
     sessions: Sessions | None = None,
+    usage: UsageReader | None = None,
     desktop_scan: Callable[[], list[AppEntry]] | None = None,
     launch_policy: LaunchPolicy | None = None,
     ready_timeout: float = READY_TIMEOUT_SECONDS,
@@ -171,10 +173,12 @@ def build_server(
             found = index.search(nombre, limit=max(1, min(limite, 10)))
             if not found and await refresh_desktop(force=True):  # recién creado y la lectura limitada no lo vio
                 found = index.search(nombre, limit=max(1, min(limite, 10)))
+            scores = usage.apps() if usage else {}
+            found = por_uso(found, scores)
             items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
             if not found:
                 return {"ok": True, "mensaje": "0 resultados", "ganador_claro": False, "resultados": []}
-            if hay_ganador_claro(found):
+            if hay_ganador_claro(found) or ganador_por_uso(found, scores):
                 return {
                     "ok": True,
                     "mensaje": f"{len(found)} resultados; ganador claro: {found[0].entry.name}",
@@ -226,6 +230,63 @@ def build_server(
         logged = {"id": id, "confirmado": True} if confirmado else {"id": id}
         return await audited("apps.launch", logged, run)
 
+    @server.tool(
+        name="apps.open",
+        description=(
+            "Busca una aplicación, juego, carpeta o archivo por su nombre y, si hay un ganador claro, lo abre en el "
+            "mismo paso (lanzada=true). Si no lo hay, no abre nada y devuelve opciones numeradas: pregunta cuál. "
+            "Si no encuentra nada, lo dice. Los ejecutables y scripts devuelven requiere_confirmacion."
+        ),
+    )
+    async def apps_open(nombre: str, confirmado: bool = False) -> dict[str, Any]:
+        async def run() -> dict[str, Any]:
+            if (waiting := await not_ready()) is not None:
+                return waiting
+            await refresh_desktop()
+            found = index.search(nombre, limit=5)
+            if not found and await refresh_desktop(force=True):
+                found = index.search(nombre, limit=5)
+            scores = usage.apps() if usage else {}
+            found = por_uso(found, scores)
+            if not found:
+                return {
+                    "ok": True,
+                    "lanzada": False,
+                    "mensaje": f"No hay ninguna app, juego, carpeta ni archivo que se llame «{nombre}». No he abierto nada.",
+                    "resultados": [],
+                }
+            winner = found[0].entry
+            if not ((hay_ganador_claro(found) or ganador_por_uso(found, scores)) and cubre(nombre, winner)):
+                items = [{"id": r.entry.id, "nombre": r.entry.name, "origen": r.entry.source} for r in found]
+                opciones = [{"n": n, **item} for n, item in enumerate(items[:MAX_OPCIONES], start=1)]
+                return {
+                    "ok": True,
+                    "lanzada": False,
+                    "ganador_claro": False,
+                    "mensaje": f"No he abierto nada: «{nombre}» encaja con {len(opciones)} opciones.",
+                    "instruccion": "Pregunta al usuario cuál de las opciones numeradas quiere.",
+                    "opciones": opciones,
+                }
+            review = policy.assess(winner)
+            if not confirmado and review.requires:
+                return {
+                    "ok": False,
+                    "requiere_confirmacion": True,
+                    "objetivo": f"{winner.name} ({review.target})",
+                    "motivo": review.reason,
+                }
+            launch(winner)
+            return {
+                "ok": True,
+                "lanzada": True,
+                "id": winner.id,
+                "nombre": winner.name,
+                "mensaje": f"Lanzado {winner.name}",
+            }
+
+        logged = {"nombre": nombre, "confirmado": True} if confirmado else {"nombre": nombre}
+        return await audited("apps.open", logged, run)
+
     if media is not None:
 
         @server.tool(
@@ -267,66 +328,120 @@ def build_server(
 
     if closer is not None:
 
-        async def open_target(ident: str) -> tuple[AppEntry | None, dict[str, Any] | None]:
-            """La app a cerrar: la del id si existe; si el modelo se inventó el id (o puso un nombre), se busca por nombre
-            entre las apps abiertas. Sin ganador, un motivo claro (no está abierta / cuál de varias); nunca se abre nada."""
+        def short_title(title: str, app: str) -> str:
+            """«Sin título - Bloc de notas» → «Sin título» (el nombre de la app ya se dice aparte)."""
+            head, _, tail = title.rpartition(" - ")
+            return head if head and normalize(tail) == normalize(app) else title
+
+        async def open_apps(query: str) -> list[tuple[AppEntry, list[Win]]]:
+            """Las apps abiertas que la consulta NOMBRA (no las que solo comparten una palabra), con sus ventanas."""
+            candidates = [r.entry for r in index.search(query, limit=10) if nombra(query, r.entry)]
+            wins = await asyncio.gather(*(asyncio.to_thread(closer.windows_of, e) for e in candidates))
+            return [(e, w) for e, w in zip(candidates, wins, strict=True) if w]
+
+        def describe(entry: AppEntry, wins: list[Win]) -> str:
+            titles = "; ".join(short_title(w.title, entry.name) for w in wins[:3])
+            return f"{entry.name} ({len(wins)} {'ventana' if len(wins) == 1 else 'ventanas'}: {titles})"
+
+        async def open_target(nombre: str, ident: str = "") -> tuple[AppEntry | None, dict[str, Any] | None]:
+            """La app a cerrar, resuelta contra las ventanas abiertas de verdad. Un id solo vale si existe en el índice
+            y esa app está abierta; si no (un id inventado), se usa el nombre. Sin ganador, un motivo claro (no está
+            abierta / cuál de varias); nunca se abre nada."""
             if (waiting := await not_ready()) is not None:
                 return None, waiting
-            entry = index.get(ident)
-            if entry is not None:
+            entry = index.get(ident) if ident else None
+            if entry is not None and await asyncio.to_thread(closer.is_open, entry):
                 return entry, None
-            candidates = [r.entry for r in index.search(ident, limit=5)]
-            is_open = await asyncio.gather(*(asyncio.to_thread(closer.is_open, e) for e in candidates))
-            running = [e for e, opened in zip(candidates, is_open, strict=True) if opened]
+            query = nombre or ident.replace("_", " ")
+            running = [e for e, _ in await open_apps(query)]
             if len(running) == 1:
                 return running[0], None
             if not running:
                 return None, {
                     "ok": False,
-                    "mensaje": f"«{ident}» no está abierta: no veo ninguna ventana suya. No hay nada que cerrar y no la abro.",
+                    "no_abierta": True,
+                    "mensaje": f"«{query}» no está abierta: no veo ninguna ventana suya. No hay nada que cerrar y no la abro.",
                 }
             options = [{"n": n, "id": e.id, "nombre": e.name} for n, e in enumerate(running[:MAX_OPCIONES], start=1)]
             return None, {
                 "ok": True,
-                "mensaje": f"«{ident}» coincide con {len(options)} apps abiertas",
+                "mensaje": f"«{query}» coincide con {len(options)} apps abiertas",
                 "ganador_claro": False,
                 "instruccion": "Pregunta al usuario cuál de las opciones numeradas quiere cerrar.",
                 "opciones": options,
             }
 
         @server.tool(
-            name="apps.close",
+            name="apps.abiertas",
             description=(
-                "Cierra una aplicación abierta (id de apps.search) como con el botón X: si tiene cambios sin guardar, "
-                "la propia app pregunta. Si devuelve requiere_confirmacion, el usuario decide. Acepta el id de apps.search "
-                "o el nombre de la app; solo cierra apps abiertas y nunca abre ninguna. Si la app sigue abierta después "
-                "(sigue_abierta=true) y el usuario quiere cerrarla, llama a apps.force_close (pide su propia confirmación)."
+                "Dice qué hay abierto. Con 'nombre', si esa app (o carpeta, o archivo) está abierta ahora mismo y sus "
+                "ventanas; sin él, la lista de ventanas abiertas. Úsala para preguntas como «¿está abierto X?» o «qué "
+                "tengo abierto»: no abre ni cierra nada."
             ),
         )
-        async def apps_close(id: str, confirmado: bool = False, nombrado: bool = False) -> dict[str, Any]:
+        async def apps_abiertas(nombre: str = "") -> dict[str, Any]:
             async def run() -> dict[str, Any]:
-                entry, problem = await open_target(id)
+                if not nombre.strip():
+                    wins = await asyncio.to_thread(closer.open_windows)
+                    items = [{"titulo": w.title, "proceso": w.exe_name} for w in wins[:20]]
+                    listed = "; ".join(w.title for w in wins[:10])
+                    more = f" y {len(wins) - 10} más" if len(wins) > 10 else ""
+                    mensaje = f"{len(wins)} ventanas abiertas: {listed}{more}." if wins else "No hay ventanas abiertas."
+                    return {"ok": True, "mensaje": mensaje, "abiertas": items}
+                if (waiting := await not_ready()) is not None:
+                    return waiting
+                found = await open_apps(nombre)
+                if found:
+                    apps = [
+                        {"nombre": e.name, "ventanas": [short_title(w.title, e.name) for w in wins]}
+                        for e, wins in found
+                    ]
+                    shown = ", ".join(describe(e, wins) for e, wins in found)
+                    return {"ok": True, "abierta": True, "apps": apps, "mensaje": f"Sí, está abierto: {shown}."}
+                known = [r.entry for r in index.search(nombre, limit=5) if nombra(nombre, r.entry)]
+                if not known:
+                    return {"ok": True, "abierta": False, "mensaje": f"No conozco ninguna app llamada «{nombre}»."}
+                return {"ok": True, "abierta": False, "mensaje": f"No, {known[0].name} no está abierto."}
+
+            return await audited("apps.abiertas", {"nombre": nombre}, run)
+
+        @server.tool(
+            name="apps.close",
+            description=(
+                "Cierra una aplicación abierta como con el botón X: si tiene cambios sin guardar, la propia app "
+                "pregunta. 'nombre' es el NOMBRE de la app tal como lo dice el usuario o apps.abiertas (no te inventes "
+                "ids); 'ventana', opcional, parte del título de la ventana. Solo cierra apps abiertas y nunca abre "
+                "ninguna. Si devuelve requiere_confirmacion, el usuario decide. Si sigue abierta (sigue_abierta=true) y "
+                "el usuario quiere cerrarla, llama a apps.force_close con el mismo nombre (pide su propia confirmación)."
+            ),
+        )
+        async def apps_close(
+            nombre: str = "", ventana: str = "", id: str = "", confirmado: bool = False, nombrado: bool = False
+        ) -> dict[str, Any]:
+            async def run() -> dict[str, Any]:
+                entry, problem = await open_target(nombre or ventana, id)
                 if entry is None:
-                    return problem or {"ok": False, "mensaje": f"No encuentro «{id}»."}
+                    return problem or {"ok": False, "mensaje": f"No encuentro «{nombre or id}»."}
                 return await asyncio.to_thread(closer.close, entry, confirmado, nombrado)
 
-            return await audited("apps.close", {"id": id, "confirmado": confirmado, "nombrado": nombrado}, run)
+            logged = {"nombre": nombre, "ventana": ventana, "id": id, "confirmado": confirmado, "nombrado": nombrado}
+            return await audited("apps.close", logged, run)
 
         @server.tool(
             name="apps.force_close",
             description=(
-                "Fuerza el cierre de una app que sigue abierta tras apps.close. Pierde los cambios sin guardar: "
-                "el usuario debe confirmarlo aparte. Solo funciona si antes se intentó apps.close con esa app."
+                "Fuerza el cierre de una app abierta (por su NOMBRE): primero la cierra como con la X y, si sigue "
+                "abierta, termina el proceso. Pierde los cambios sin guardar: el usuario lo confirma aparte."
             ),
         )
-        async def apps_force_close(id: str) -> dict[str, Any]:
+        async def apps_force_close(nombre: str = "", ventana: str = "", id: str = "") -> dict[str, Any]:
             async def run() -> dict[str, Any]:
-                entry, problem = await open_target(id)
+                entry, problem = await open_target(nombre or ventana, id)
                 if entry is None:
-                    return problem or {"ok": False, "mensaje": f"No encuentro «{id}»."}
+                    return problem or {"ok": False, "mensaje": f"No encuentro «{nombre or id}»."}
                 return await asyncio.to_thread(closer.force_close, entry)
 
-            return await audited("apps.force_close", {"id": id}, run)
+            return await audited("apps.force_close", {"nombre": nombre, "ventana": ventana, "id": id}, run)
 
     if web is not None:
 
@@ -491,6 +606,7 @@ async def serve(index: AppIndex, token: str, port: int, actions: ActionLog, db_p
         media=media,
         sessions=sessions,
         desktop_scan=lambda: desktop.scan(desktop.roots()),
+        usage=UsageReader(db_path, float(os.environ.get("DIOGENES_USO_VIDA_MEDIA_DIAS", "14"))),
     )
     config = uvicorn.Config(create_app(server, token), host=HOST, port=port, log_level="info")
     refresh = asyncio.create_task(_refresh_forever(index, cache))

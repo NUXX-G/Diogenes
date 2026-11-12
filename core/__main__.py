@@ -9,14 +9,18 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from core.agent import PANIC_TOOL, Agent, Step
 from core.hotkey import HotkeyListener, load_combo
-from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, OllamaProvider
+from core.llm.ollama import DEFAULT_BASE_URL, DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaProvider
 from core.mcp_client import connect_hands
+from core.metrics import MetricsLog
+from core.recipes import RecipeStore
 from core.session import Session
+from core.toolsets import ToolSelector
 
 
 def format_step(step: Step) -> str:
@@ -55,11 +59,13 @@ async def amain() -> int:
         os.environ.get("DIOGENES_OLLAMA_BASE_URL", DEFAULT_BASE_URL),
         os.environ.get("DIOGENES_OLLAMA_MODEL", DEFAULT_MODEL),
         keep_alive=os.environ.get("DIOGENES_OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
+        num_ctx=int(os.environ.get("DIOGENES_OLLAMA_NUM_CTX", DEFAULT_NUM_CTX)),
     )
 
     async def read() -> str:
         return await asyncio.to_thread(input, "> ")
 
+    recipes = RecipeStore(Path(os.environ.get("DIOGENES_DB_PATH", "data/diogenes.db")))
     async with AsyncExitStack() as stack:
         try:
             tools = await connect_hands(stack, url, token)
@@ -71,12 +77,28 @@ async def amain() -> int:
                 file=sys.stderr,
             )
             return 1
-        session = Session(print, release=lambda: tools.call(PANIC_TOOL, {}))
-        agent = Agent(llm, tools, confirm=session.confirm, on_step=lambda s: print(format_step(s)))
+        session = Session(
+            print,
+            release=lambda: tools.call(PANIC_TOOL, {}),
+            metrics=MetricsLog(Path("logs")),
+            show_metrics=os.environ.get("DIOGENES_TIEMPOS", "1") != "0",
+        )
+        agent = Agent(
+            llm,
+            tools,
+            confirm=session.confirm,
+            on_step=lambda s: print(format_step(s)),
+            toolset=ToolSelector.load(os.environ.get("DIOGENES_HERRAMIENTAS", "todas")),
+            recipes=recipes,
+            on_note=print,
+        )
         loop = asyncio.get_running_loop()
         combo = load_combo()
         hotkey = HotkeyListener(combo, lambda: loop.call_soon_threadsafe(session.panic))
         print(f"Diogenes ({llm.model}). Escribe 'salir' para terminar o '/nuevo' para olvidar la conversación.")
+        print(
+            "Recetas: /aprender <frase> · /fin · /cancelar · /recetas · /receta borrar <n.º> · /alias · /alias borrar <x>"
+        )
         if hotkey.start():
             print(f"Botón del pánico: {combo} o /parar (también /para).")
         else:

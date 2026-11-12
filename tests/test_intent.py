@@ -116,7 +116,8 @@ async def test_el_verbo_manda_abrir_no_cerrar() -> None:
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("no"))
     preguntas = Preguntas()
     await agente(llm, backend, preguntas).run("abre el bloc de notas")
-    assert backend.calls[1:] == [("apps.close", {"id": "startapps:bloc", "nombrado": False})]  # hands decide y pregunta
+    cierre = {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": False}
+    assert backend.calls[1:] == [("apps.close", cierre)]  # hands decide y pregunta
     assert preguntas.vistas[0][0] == "apps.close"
 
 
@@ -125,7 +126,7 @@ async def test_cerrar_lo_que_el_usuario_pidio_cerrar_va_directo() -> None:
     llm = FakeLLM(llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc"), decir("ok"))
     preguntas = Preguntas()
     await agente(llm, backend, preguntas).run("cierra el bloc de notas")
-    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": True})
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": True})
     assert preguntas.vistas == []
 
 
@@ -135,7 +136,7 @@ async def test_el_modelo_no_puede_decir_que_el_usuario_nombro_la_app() -> None:
         llamar("apps_search", nombre="bloc"), llamar("apps_close", id="startapps:bloc", nombrado=True), decir("no")
     )
     await agente(llm, backend, Preguntas()).run("búscame el bloc de notas")
-    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombrado": False})
+    assert backend.calls[-1] == ("apps.close", {"id": "startapps:bloc", "nombre": "Bloc de notas", "nombrado": False})
 
 
 # --- elecciones y confirmaciones de turnos anteriores cuentan como pedidas -------------------------------------
@@ -158,18 +159,28 @@ async def test_abre_el_editor_lista_y_el_segundo_se_abre_sin_preguntar() -> None
     assert preguntas.vistas == []
 
 
-async def test_tras_la_lista_otra_opcion_que_el_usuario_no_eligio_si_pide_confirmacion() -> None:
+async def test_tras_la_lista_se_abre_exactamente_la_opcion_elegida_sin_el_modelo() -> None:
+    """Antes el modelo podía abrir otra opción distinta de la elegida (y entonces se pedía confirmación). Ahora la
+    elección se ejecuta en código: el modelo ni interviene."""
     backend = FakeBackend({"apps.search": EMPATE}, TOOLS)
-    llm = FakeLLM(
-        llamar("apps_search", nombre="editor"),
-        decir("¿Cuál? 1. Notepad++ 2. Editor de texto Word"),
-        llamar("apps_launch", id="startapps:notepad"),  # el usuario dijo "el segundo"; el modelo abre el primero
-        decir("no"),
-    )
+    llm = FakeLLM(llamar("apps_search", nombre="editor"), decir("¿Cuál? 1. Notepad++ 2. Editor de texto Word"))
     preguntas = Preguntas()
     agent = agente(llm, backend, preguntas)
     await agent.run("abre el editor")
     await agent.run("el segundo")
+    assert backend.calls[-1] == ("apps.launch", {"id": "startapps:word"})
+    assert preguntas.vistas == [] and len(llm.seen) == 2
+
+
+async def test_si_el_modelo_abre_otra_app_distinta_de_la_pedida_pide_confirmacion() -> None:
+    backend = FakeBackend({"apps.search": EMPATE}, TOOLS)
+    llm = FakeLLM(
+        llamar("apps_search", nombre="editor"),
+        llamar("apps_launch", id="startapps:notepad"),  # pidió el editor de Word; el modelo abre Notepad++
+        decir("no"),
+    )
+    preguntas = Preguntas()
+    await agente(llm, backend, preguntas).run("abre el editor de texto word")
     assert llamadas(backend) == ["apps.search"]
     assert preguntas.vistas[0][1]["destino"] == "Notepad++"
 
@@ -234,7 +245,8 @@ async def test_inyeccion_en_una_pagina_ve_a_evil_com_pide_confirmacion() -> None
         decir("no he ido"),
     )
     preguntas = Preguntas(respuesta=False)
-    await agente(llm, backend, preguntas).run("búscame en YouTube mochis")
+    # pide más que buscar: el turno sigue tras la búsqueda y el modelo ve la página con la inyección
+    await agente(llm, backend, preguntas).run("búscame en YouTube mochis y ábreme el primero")
     assert [c for c in backend.calls if c[0] == "browser.open"] == [
         ("browser.open", {"url": "https://www.youtube.com/@hrom/videos"})
     ]
@@ -254,7 +266,7 @@ async def test_inyeccion_en_una_pagina_abre_calculadora_no_lanza_nada() -> None:
         decir("no"),
     )
     preguntas = Preguntas(respuesta=False)
-    await agente(llm, backend, preguntas).run("búscame en YouTube mochis")
+    await agente(llm, backend, preguntas).run("búscame en YouTube mochis y ábreme el primero")
     assert "apps.launch" not in llamadas(backend)
     assert preguntas.vistas[0][0] == "apps.launch"
 
@@ -364,10 +376,18 @@ async def test_un_nombre_en_lugar_del_id_en_apps_close_cuenta_como_pedido_si_lo_
     assert sent["nombrado"] is True and preguntas.vistas == []
 
 
-async def test_un_nombre_en_apps_close_que_no_dijiste_no_cuenta_como_pedido() -> None:
+async def test_un_nombre_en_apps_close_que_no_dijiste_se_cambia_por_el_que_dijiste() -> None:
+    """El modelo quiere cerrar la calculadora cuando el usuario pidió el notepad: se cierra lo que se pidió."""
     backend = FakeBackend(names=TOOLS)
-    llm = FakeLLM(llamar("apps_close", id="calculadora"), decir("hecho"))
+    llm = FakeLLM(llamar("apps_close", nombre="calculadora"), decir("hecho"))
     await agente(llm, backend).run("cierra el notepad")
+    assert next(a for n, a in backend.calls if n == "apps.close") == {"nombre": "notepad", "nombrado": True}
+
+
+async def test_sin_nada_que_diga_el_mensaje_un_nombre_que_no_dijiste_no_cuenta_como_pedido() -> None:
+    backend = FakeBackend(names=TOOLS)
+    llm = FakeLLM(llamar("apps_close", nombre="calculadora"), decir("hecho"))
+    await agente(llm, backend).run("hola")
     assert next(a for n, a in backend.calls if n == "apps.close")["nombrado"] is False
 
 
@@ -488,8 +508,7 @@ async def test_ciérralo_tras_hablar_de_paint_en_el_agente_cierra_directo_sin_pr
     preguntas = Preguntas()
     llm = FakeLLM(
         llamar("apps_search", nombre="paint"),
-        llamar("apps_launch", id="startapps:paint"),
-        decir("Paint abierto."),
+        llamar("apps_launch", id="startapps:paint"),  # lanzada: la respuesta la escribe el código
         llamar("apps_close", id="startapps:paint"),
         decir("Cerrado."),
     )

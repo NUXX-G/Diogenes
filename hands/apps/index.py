@@ -9,10 +9,12 @@ import threading
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 
 from rapidfuzz import fuzz, process
 
 from hands.apps.models import AppEntry, normalize
+from hands.apps.usage import clear_by_use
 
 # Si dos fuentes dan la misma app, gana la primera: es la que Windows o el cliente de juegos usan de verdad.
 PRIORIDAD = ("startapps", "steam", "epic", "startmenu", "carpetas", "desktop", "registry")
@@ -82,6 +84,85 @@ def hay_ganador_claro(resultados: Sequence[Resultado]) -> bool:
     if a.con_interfaz != b.con_interfaz:
         return True
     return a.score - b.score > MARGEN_CLARO
+
+
+# Palabras que acompañan al nombre de una app sin ser parte de él ("abre EL bloc DE notas", "la APP de Spotify").
+CONECTORES = frozenset(
+    {
+        "el",
+        "la",
+        "los",
+        "las",
+        "un",
+        "una",
+        "de",
+        "del",
+        "al",
+        "a",
+        "en",
+        "mi",
+        "app",
+        "aplicacion",
+        "programa",
+        "juego",
+    }
+)
+
+
+def palabra_encaja(palabra: str, nombres: list[str]) -> bool:
+    for n in nombres:
+        if palabra == n or (len(palabra) >= 3 and n.startswith(palabra)):
+            return True
+        if min(len(palabra), len(n)) >= 4 and SequenceMatcher(None, palabra, n).ratio() >= 0.8:
+            return True
+    return False
+
+
+def cubre(query: str, entry: AppEntry) -> bool:
+    """¿La consulta nombra esa app y nada más? Con una sola palabra decide el índice (tolera erratas y abreviaturas);
+    con varias, cada palabra tiene que encajar con el nombre o un alias: "spotify y pon daft punk" no es "Spotify"."""
+    palabras = [w for w in normalize(query).split() if w not in CONECTORES]
+    if len(palabras) <= 1:
+        return True
+    nombres = [w for text in (entry.name, *entry.aliases) for w in normalize(text).split()]
+    return all(palabra_encaja(p, nombres) for p in palabras)
+
+
+def por_uso(resultados: Sequence[Resultado], uso: dict[str, float]) -> list[Resultado]:
+    """Reordena por uso solo DENTRO de los grupos que el índice ya considera iguales (mismo tipo de coincidencia y de
+    fuente): una app muy usada no adelanta a una coincidencia exacta, pero desempata entre dos parecidas."""
+    if not uso:
+        return list(resultados)
+    puesto = {id(r): n for n, r in enumerate(resultados)}
+
+    def grupo(r: Resultado) -> tuple[int, bool, int]:
+        return (0 if r.tier <= PREFIJO else 1, not r.con_interfaz, r.tier)
+
+    return sorted(resultados, key=lambda r: (grupo(r), -uso.get(r.entry.id, 0.0), puesto[id(r)]))
+
+
+def ganador_por_uso(resultados: Sequence[Resultado], uso: dict[str, float]) -> bool:
+    """Sin ganador claro por nombre, ¿lo hay por uso? Las dos primeras del mismo grupo y la primera mucho más usada."""
+    if len(resultados) < 2:
+        return False
+    a, b = resultados[0], resultados[1]
+    if (a.tier, a.con_interfaz) != (b.tier, b.con_interfaz):
+        return False
+    return clear_by_use(a.entry.id, b.entry.id, uso)
+
+
+def nombra(query: str, entry: AppEntry) -> bool:
+    """¿La consulta nombra ESA app? Cada palabra con significado de la consulta encaja con una palabra del nombre o de
+    un alias (el ejecutable), o el nombre entero está en la consulta. "bloc de notas" no nombra al "Explorador de
+    archivos" aunque compartan "de"."""
+    palabras = [w for w in normalize(query).split() if w not in CONECTORES]
+    if not palabras:
+        return False
+    nombre = normalize(entry.name)
+    if nombre and f" {nombre} " in f" {normalize(query)} ":
+        return True
+    nombres = [w for text in (entry.name, *entry.aliases) for w in normalize(text).split() if w not in CONECTORES]
+    return bool(nombres) and all(palabra_encaja(p, nombres) for p in palabras)
 
 
 class AppIndex:

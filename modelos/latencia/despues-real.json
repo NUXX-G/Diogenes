@@ -1,0 +1,188 @@
+[
+  {
+    "pasada": 1,
+    "orden": "abre Spotify",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 3708,
+    "tokens_salida": 21,
+    "segundos_modelo": 9.54,
+    "segundos_resto": 0.003,
+    "segundos_total": 9.54,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.open"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He abierto Spotify."
+  },
+  {
+    "pasada": 1,
+    "orden": "cierra la calculadora",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 3805,
+    "tokens_salida": 23,
+    "segundos_modelo": 12.34,
+    "segundos_resto": 0.007,
+    "segundos_total": 12.35,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.close",
+      "apps.close"
+    ],
+    "confirmaciones": [
+      "apps.close"
+    ],
+    "respuesta": "He cerrado Calculadora."
+  },
+  {
+    "pasada": 1,
+    "orden": "búscame en YouTube cómo hacer mochis",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 3893,
+    "tokens_salida": 33,
+    "segundos_modelo": 16.32,
+    "segundos_resto": 0.004,
+    "segundos_total": 16.32,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He buscado «cómo hacer mochis» en YouTube."
+  },
+  {
+    "pasada": 1,
+    "orden": "pausa el vídeo de YouTube",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4125,
+    "tokens_salida": 27,
+    "segundos_modelo": 20.71,
+    "segundos_resto": 0.004,
+    "segundos_total": 20.71,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "media.control"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho y comprobado: Chrome ahora está en pausa."
+  },
+  {
+    "pasada": 1,
+    "orden": "dame el vídeo más visto del canal Hrom",
+    "ruta": "receta",
+    "llamadas_modelo": 0,
+    "tokens_entrada": 0,
+    "tokens_salida": 0,
+    "segundos_modelo": 0,
+    "segundos_resto": 0.008,
+    "segundos_total": 0.01,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho como me enseñaste («dame el vídeo más visto del canal Hrom»). Estoy en «hrom: récord absoluto - YouTube» (https://www.youtube.com/watch?v=hrom%3A%20r%C3%A9cord%20absoluto).\n(Aviso: «dame el vídeo más visto del canal Hrom» no coincide literalmente con ningún nombre de la página; compruébalo.)"
+  },
+  {
+    "pasada": 2,
+    "orden": "abre Spotify",
+    "ruta": "receta",
+    "llamadas_modelo": 0,
+    "tokens_entrada": 0,
+    "tokens_salida": 0,
+    "segundos_modelo": 0,
+    "segundos_resto": 0.002,
+    "segundos_total": 0.0,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.open"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He abierto Spotify."
+  },
+  {
+    "pasada": 2,
+    "orden": "cierra la calculadora",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 5070,
+    "tokens_salida": 23,
+    "segundos_modelo": 53.65,
+    "segundos_resto": 0.004,
+    "segundos_total": 53.65,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.close",
+      "apps.close"
+    ],
+    "confirmaciones": [
+      "apps.close"
+    ],
+    "respuesta": "He cerrado Calculadora."
+  },
+  {
+    "pasada": 2,
+    "orden": "búscame en YouTube cómo hacer mochis",
+    "ruta": "receta",
+    "llamadas_modelo": 0,
+    "tokens_entrada": 0,
+    "tokens_salida": 0,
+    "segundos_modelo": 0,
+    "segundos_resto": 0.003,
+    "segundos_total": 0.0,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He buscado «cómo hacer mochis» en YouTube."
+  },
+  {
+    "pasada": 2,
+    "orden": "pausa el vídeo de YouTube",
+    "ruta": "receta",
+    "llamadas_modelo": 0,
+    "tokens_entrada": 0,
+    "tokens_salida": 0,
+    "segundos_modelo": 0,
+    "segundos_resto": 0.003,
+    "segundos_total": 0.0,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "media.control"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho y comprobado: Chrome ahora está en pausa."
+  },
+  {
+    "pasada": 2,
+    "orden": "dame el vídeo más visto del canal Hrom",
+    "ruta": "receta",
+    "llamadas_modelo": 0,
+    "tokens_entrada": 0,
+    "tokens_salida": 0,
+    "segundos_modelo": 0,
+    "segundos_resto": 0.01,
+    "segundos_total": 0.01,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho como me enseñaste («dame el vídeo más visto del canal Hrom»). Estoy en «hrom: récord absoluto - YouTube» (https://www.youtube.com/watch?v=hrom%3A%20r%C3%A9cord%20absoluto).\n(Aviso: «dame el vídeo más visto del canal Hrom» no coincide literalmente con ningún nombre de la página; compruébalo.)"
+  }
+]

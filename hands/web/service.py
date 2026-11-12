@@ -92,6 +92,9 @@ class WebService:
         self._fetch = fetch
         self._open = opener
         self._browser = browser
+        self._seen: dict[
+            str, Any
+        ] = {}  # la página que dejó abierta la última llamada a _show, si fue en nuestro Chrome
         self._strategies = (
             list(strategies)
             if strategies is not None
@@ -106,10 +109,13 @@ class WebService:
 
         Devuelve dónde y, si hubo que recurrir al del sistema por un fallo, el motivo: nunca se cae en silencio."""
         reason = None
+        self._seen = {}
         if self._browser is not None:
             try:
                 result = await self._browser.open(url)
                 if result.get("ok"):
+                    if isinstance(result.get("pagina"), str):
+                        self._seen = {"titulo": result.get("titulo", ""), "pagina": result["pagina"]}
                     return DIOGENES_BROWSER, None
                 reason = str(result.get("mensaje") or "no se pudo abrir la página")
             except Exception as exc:
@@ -123,7 +129,7 @@ class WebService:
             return {"ok": False, "mensaje": "Solo se abren URLs http o https."}
         where, warning = await self._show(url)
         result = {"ok": True, "mensaje": f"Abierto {url} en el {where}", "url": url, "abierto_en": where}
-        return _with_warning(result, warning)
+        return _with_warning({**result, **self._seen}, warning)
 
     def _found(self, site: str, url: str, origin: str, shown: tuple[str, str | None]) -> dict[str, Any]:
         where, warning = shown
@@ -137,10 +143,14 @@ class WebService:
             "abierto_en": where,
             "siguiente": (
                 "Si la petición era solo buscar, has terminado. Si pedía algo más (abrir un resultado concreto, "
+                "ordenar, leer un dato), la página ya está abierta y va aquí abajo: sigue con browser_click sin "
+                "pedir otro snapshot."
+                if self._seen
+                else "Si la petición era solo buscar, has terminado. Si pedía algo más (abrir un resultado concreto, "
                 "ordenar, leer un dato), la página ya está abierta: sigue con browser_snapshot y browser_click."
             ),
         }
-        return _with_warning(result, warning)
+        return _with_warning({**result, **self._seen}, warning)
 
     async def site_search(self, site: str, query: str) -> dict[str, Any]:
         key = _site_key(site)

@@ -58,6 +58,20 @@ FILLERS = frozenset(
     }
 )
 ID_LIKE = re.compile(r"^[a-z]+:\S+$")  # un id del índice (`startapps:1a2b3c4d`), no el nombre de una app
+# Por si un confirmaciones.json antiguo no trae estas listas.
+DEFAULT_NOT_VERBS = ("abierto", "abierta", "abiertos", "abiertas", "cerrado", "cerrada", "cerrados", "cerradas")
+DEFAULT_STATE_WORDS = ("abierto", "abierta", "abiertos", "abiertas", "encendido", "encendida", "funcionando")
+DEFAULT_MODE_WORDS = ("fuerza", "forzando", "forzar", "forzado", "ya", "todo", "si", "hay", "esta", "tengo", "que")
+# Herramientas que buscan y abren por nombre en un paso: se juzgan como apps.launch (un config antiguo no las lista).
+OPEN_BY_NAME = ("apps.open",)
+# Una URL o un dominio escrito en el mensaje ("youtube.com", "https://es.wikipedia.org/wiki/X").
+WEB_ADDRESS = re.compile(
+    r"https?://\S+|\b(?:[\w-]+\.)+(?:com|es|org|net|io|tv|dev|app|edu|gob|info|eu|co|me)\b(?:/\S*)?", re.IGNORECASE
+)
+# Coletillas que no nombran nada: "ábrelo OTRA VEZ", "ciérralo DE NUEVO".
+REPEAT_WORDS = frozenset({"otra", "vez", "de", "nuevo", "ahora", "mismo", "ya", "tambien"})
+# Conjunciones que encadenan otra orden ("abre Spotify Y pon Daft Punk").
+CHAINING = frozenset({"y", "e", "luego", "despues", "tambien", "ademas", "and", "then"})
 
 
 @dataclass(frozen=True)
@@ -73,18 +87,30 @@ class IntentConfig:
     free_in_web: frozenset[str]
     generic_words: frozenset[str]
     blocked_when_closing: frozenset[str] = frozenset({"apps.launch"})
+    not_verbs: frozenset[str] = frozenset()  # "abierto" empieza como "abr*" pero no pide abrir nada
+    state_words: frozenset[str] = frozenset()  # "¿está abierto X?": pregunta, no orden
+    mode_words: frozenset[str] = frozenset()  # "a la FUERZA": cómo, no qué
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> IntentConfig:
         tools = {
             name: Rule(tuple(rule["verbos"]), str(rule["objetivo"])) for name, rule in data["herramientas"].items()
         }
+        blocked = set(data.get("bloqueadas_al_cerrar", ["apps.launch"]))
+        if "apps.launch" in tools:
+            for name in OPEN_BY_NAME:
+                tools.setdefault(name, tools["apps.launch"])
+                if "apps.launch" in blocked:
+                    blocked.add(name)
         return cls(
             verbs={group: tuple(roots) for group, roots in data["verbos"].items()},
             tools=tools,
             free_in_web=frozenset(data.get("libres_en_web", [])),
             generic_words=frozenset(normalize(w) for w in data.get("palabras_genericas", [])),
-            blocked_when_closing=frozenset(data.get("bloqueadas_al_cerrar", ["apps.launch"])),
+            blocked_when_closing=frozenset(blocked),
+            not_verbs=frozenset(normalize(w) for w in data.get("no_verbos", DEFAULT_NOT_VERBS)),
+            state_words=frozenset(normalize(w) for w in data.get("estado", DEFAULT_STATE_WORDS)),
+            mode_words=frozenset(normalize(w) for w in data.get("palabras_de_modo", DEFAULT_MODE_WORDS)),
         )
 
     @classmethod
@@ -136,6 +162,7 @@ class IntentGate:
         self._known_apps: dict[str, str] = {}
         self._web_hosts: set[str] = set()
         self._web_ok = False
+        self._open_seen: list[str] = []
         self._referent: tuple[str, str] | None = (
             None  # ("app" | "web", nombre o dominio) de lo último de lo que se habló
         )
@@ -159,7 +186,19 @@ class IntentGate:
         if self._referent is not None and self._has_reference(words):
             self._mandate |= self._referent_words()
 
+    def verb_root(self, word: str) -> str | None:
+        """La raíz de `confirmaciones.json` con la que encaja la palabra ("ábreme" → "abr*"), o None si no es un verbo."""
+        if word in self._config.not_verbs:
+            return None
+        for roots in self._config.verbs.values():
+            for root in roots:
+                if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
+                    return root
+        return None
+
     def _is_verb_word(self, word: str) -> bool:
+        if word in self._config.not_verbs:
+            return False
         for roots in self._config.verbs.values():
             for root in roots:
                 if (word.startswith(root[:-1]) if root.endswith("*") else word == root) and len(word) >= 2:
@@ -182,6 +221,54 @@ class IntentGate:
         if not target or all(w in PRONOUNS for w in target):
             return None  # "ábrelo", "abre eso": no hay nada que buscar (lo resuelve la conversación)
         return " ".join(target)
+
+    def site_request(self, user_text: str) -> tuple[str, str] | None:
+        """Si la orden es sobre una web: (sitio o URL, consulta). La consulta va vacía si no busca nada.
+
+        "búscame en YouTube cómo hacer mochis" → ("youtube", "como hacer mochis"); "busca mochis en youtube" →
+        ("youtube", "mochis"); "abre ejemplo.com" → ("ejemplo.com", ""). Una web se reconoce por una URL o un dominio, o
+        por "en <sitio>" junto a un verbo de buscar; no hay ninguna web escrita a mano."""
+        url = WEB_ADDRESS.search(user_text)
+        target = self.action_target(user_text) or ""
+        if url is not None:
+            site = url.group(0).rstrip(".,;:!?)»\"'")
+            kept = [w for w in target.split() if w not in normalize(site).split() and w not in FILLERS]
+            while kept and kept[-1] in ("en", "de", "del"):
+                kept.pop()
+            query = " ".join(kept)
+            searching = any(
+                self.verb_root(w) in self._config.verbs.get("buscar", ()) for w in normalize(user_text).split()
+            )
+            return site, query if searching else ""
+        words = normalize(user_text).split()
+        if not any(self.verb_root(w) in self._config.verbs.get("buscar", ()) for w in words[:3]):
+            return None
+        parts = target.split()
+        if len(parts) >= 3 and parts[0] == "en":  # "en youtube cómo hacer mochis"
+            return parts[1], " ".join(parts[2:])
+        if "en" in parts[1:-1] or (len(parts) >= 3 and parts[-2] == "en"):  # "mochis en youtube"
+            cut = len(parts) - 1 - parts[::-1].index("en")
+            site, query = " ".join(parts[cut + 1 :]), " ".join(parts[:cut])
+            if site and query and len(site.split()) <= 2:
+                return site, query
+        return None
+
+    def is_compound(self, user_text: str) -> bool:
+        """¿Encadena varias órdenes? Una conjunción ("y", "luego", "después") seguida más adelante de otro verbo."""
+        words = normalize(user_text).split()
+        for i, word in enumerate(words):
+            if word in CHAINING and any(self._is_verb_word(w) for w in words[i + 1 :]):
+                return True
+        return False
+
+    def refers_only(self, user_text: str) -> bool:
+        """¿El objetivo del mensaje es solo un pronombre o una referencia ("ciérralo", "ábrelo", "abre eso", "la
+        misma")? Entonces lo que se hizo depende de la conversación, no de la frase: no sirve como receta."""
+        words = normalize(user_text).split()
+        target = self.action_target(user_text)
+        if not words or (target is not None and not set(target.split()) <= REPEAT_WORDS):
+            return False
+        return self._has_reference(words) or any(w in PRONOUNS for w in words)
 
     def _has_reference(self, words: list[str]) -> bool:
         """¿Hay un pronombre ("eso", "la misma") o un verbo con pronombre pegado ("ciérralo", "ábrelo")?"""
@@ -212,12 +299,13 @@ class IntentGate:
                 latest, self._referent = max(positions), ("app", name)
 
     def _has_verb(self, groups: tuple[str, ...]) -> bool:
+        words = self._mandate - self._config.not_verbs
         for group in groups:
             for root in self._config.verbs.get(group, ()):
                 if root.endswith("*"):
-                    if any(w.startswith(root[:-1]) for w in self._mandate):
+                    if any(w.startswith(root[:-1]) for w in words):
                         return True
-                elif root in self._mandate:
+                elif root in words:
                     return True
         return False
 
@@ -247,9 +335,54 @@ class IntentGate:
         """El mensaje pide cerrar y no pide abrir nada: abrir sería lo contrario de lo pedido."""
         return self._has_verb(("cerrar",)) and not self._has_verb(("abrir",))
 
+    def asking_state(self, text: str | None = None) -> bool:
+        """¿Pregunta si algo está abierto ("¿está abierto el bloc?", "busca si hay un bloc de notas abierto") en vez de
+        pedir abrirlo? `text` None: el mensaje del turno actual."""
+        words = set(normalize(text).split()) if text is not None else self._mandate
+        if not words & self._config.state_words:
+            return False
+        roots = self._config.verbs.get("abrir", ())
+        return not any(self.verb_root(w) in roots and w not in ("quiero", "dame") for w in words)
+
+    def state_target(self, text: str) -> str:
+        """De qué app pregunta ("busca si hay un bloc de notas abierto" → "bloc de notas"); '' si de ninguna."""
+        skip = self._config.state_words | self._config.mode_words | FILLERS
+        words = [w for w in normalize(text).split() if w not in skip and not self._is_verb_word(w)]
+        return " ".join(words)
+
+    def close_target(self, text: str, *, whole: bool = False) -> str | None:
+        """La app que el mensaje pide cerrar, sin el modo ("cierra a la fuerza el bloc de notas" → "bloc de notas")."""
+        target = self.action_target(text)
+        if target is None:
+            return None
+        cut: list[str] = []
+        for w in target.split():
+            if w in CHAINING and not whole:  # «cierra paint y dime la hora»: lo de después es otra orden
+                break
+            cut.append(w)
+        words = [w for w in cut if w not in self._config.mode_words and w not in FILLERS]
+        return " ".join(words) or None
+
+    def referent_app(self) -> str | None:
+        """La app de la que se habla ("ciérralo"), si la hay."""
+        return self._referent[1] if self._referent and self._referent[0] == "app" else None
+
+    @property
+    def open_seen(self) -> list[str]:
+        """Las apps que la última llamada a apps.abiertas encontró abiertas."""
+        return list(self._open_seen)
+
+    def names_app(self, name: str) -> bool:
+        """¿El mensaje del turno nombra esa app?"""
+        return self._names_app(name)
+
     def check(self, tool: str, args: dict[str, Any]) -> Verdict:
         if tool in self._config.blocked_when_closing and self._only_closing():
-            return Verdict(False, str(args.get("id", "")), "has pedido cerrar, no abrir", blocked=True)
+            target = str(args.get("id") or args.get("nombre") or "")
+            return Verdict(False, target, "has pedido cerrar, no abrir", blocked=True)
+        if tool in self._config.blocked_when_closing and self.asking_state():
+            target = str(args.get("id") or args.get("nombre") or "")
+            return Verdict(False, target, "preguntas si está abierto, no pides abrirlo", blocked=True)
         rule = self._config.tools.get(tool)
         if rule is None:
             if tool in self._config.free_in_web and not self._web_ok:
@@ -257,7 +390,7 @@ class IntentGate:
             return Verdict(True)
         verbs_ok = self._has_verb(rule.verbs)
         if rule.target == "app":
-            app_id = str(args.get("id", ""))
+            app_id = str(args.get("id") or args.get("nombre") or "")
             name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)  # nombre en vez de id
             ok = verbs_ok and name is not None and self._names_app(name)
             return Verdict(ok, name or app_id, "" if ok else "no lo has pedido en tu mensaje")
@@ -274,6 +407,29 @@ class IntentGate:
         ok = verbs_ok and self._names_site(site)
         return Verdict(ok, site, "" if ok else "esa web no la has nombrado en tu mensaje")
 
+    def grant_alias(self, alias: str, app_id: str, name: str) -> bool:
+        """El usuario llama «alias» a esa app (lo eligió él de una lista): si su mensaje dice el alias, cuenta como que
+        la ha nombrado. Devuelve si se concedió."""
+        words = [w for w in normalize(alias).split() if w not in FILLERS]
+        if not words or not all(_mentions(w, self._mandate) for w in words):
+            return False
+        self._known_apps[app_id] = name
+        self._mandate |= set(normalize(name).split())
+        return True
+
+    def only_closing(self) -> bool:
+        """El mensaje pide cerrar y no abrir."""
+        return self._only_closing()
+
+    @property
+    def in_web(self) -> bool:
+        """¿Se está trabajando en una web en esta conversación?"""
+        return self._web_ok or bool(self._web_hosts)
+
+    def app_name(self, app_id: str) -> str | None:
+        """El nombre de una app que ya salió en la conversación (por su id), o None."""
+        return self._known_apps.get(app_id)
+
     def destination_allowed(self, url: str) -> bool:
         """¿Esa web la ha pedido el usuario, o ya la confirmó o se está trabajando en ella en esta conversación?"""
         host = host_of(url)
@@ -288,6 +444,13 @@ class IntentGate:
         data = _ok(output)
         if data is None:
             return
+        if tool == "apps.abiertas":
+            names = [str(a["nombre"]) for a in data.get("apps") or [] if isinstance(a, dict) and a.get("nombre")]
+            self._open_seen = names or self._open_seen
+            for name in names:
+                if self._names_app(name):
+                    self._referent = ("app", name)
+            return
         if tool == "apps.search":
             for item in (data.get("resultados") or []) + (data.get("opciones") or []):
                 known = isinstance(item, dict) and item.get("id") and item.get("nombre")
@@ -297,8 +460,18 @@ class IntentGate:
                         self._referent = ("app", str(item["nombre"]))
             return
         rule = self._config.tools.get(tool)
+        if tool in OPEN_BY_NAME and data.get("id") and data.get("nombre"):  # abrió (o propuso) una app concreta
+            self._known_apps[str(data["id"])] = str(data["nombre"])
+        for item in data.get("opciones") or []:
+            if (
+                isinstance(item, dict)
+                and item.get("id")
+                and item.get("nombre")
+                and len(self._known_apps) < MAX_KNOWN_APPS
+            ):
+                self._known_apps[str(item["id"])] = str(item["nombre"])
         if rule is not None and rule.target == "app":  # se ejecutó por orden del usuario: de eso se habla ahora
-            app_id = str(args.get("id", ""))
+            app_id = str(data.get("id") or args.get("id") or args.get("nombre") or "")
             name = self._known_apps.get(app_id) or (None if ID_LIKE.match(app_id) else app_id)
             if name:
                 self._referent = ("app", name)

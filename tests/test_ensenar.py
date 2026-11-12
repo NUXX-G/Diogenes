@@ -1,0 +1,219 @@
+"""Bloque 3: modo enseñar. /aprender <frase> graba lo que el usuario guía paso a paso, /fin lo guarda como receta con
+huecos y /cancelar lo descarta. Hito: enseñado con un canal, funciona con otro sin el planificador."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from mcp import Client
+
+from core.agent import Agent
+from core.bench.fakes import FakePC
+from core.mcp_client import McpTools
+from core.recipes import RecipeStore
+from core.safety import ConfirmationPolicy
+from core.session import Session
+from tests.test_agent import FakeLLM, decir, llamar
+
+FRASE = "dame el vídeo más visto del canal Hrom"
+
+
+def guion_hrom() -> list[Any]:
+    """Lo que hace el modelo guiado: refs del sitio falso (resultados → canal → Vídeos → Populares → primero)."""
+    return [
+        # «abre el canal Hrom en youtube»
+        llamar("web_site_search", sitio="YouTube", consulta="Hrom"),
+        llamar("browser_snapshot"),
+        llamar("browser_click", ref="e3"),  # link "Hrom" -> /@hrom
+        decir("Estoy en el canal."),
+        # «pestaña vídeos»
+        llamar("browser_click", ref="e3"),  # tab "Vídeos"
+        decir("Estoy en Vídeos."),
+        # «ordena por populares»
+        llamar("browser_click", ref="e6"),  # button "Populares"
+        decir("Ordenado."),
+        # «abre el primero»
+        llamar("browser_click", ref="e7"),  # el primero de la lista ya ordenada
+        decir("Abierto."),
+    ]
+
+
+async def ensenar(agent: Agent) -> str:
+    assert agent.command(f"/aprender {FRASE}").startswith("Grabando")  # type: ignore[union-attr]
+    for paso in ("abre el canal Hrom en youtube", "pestaña vídeos", "ordena por populares", "abre el primero"):
+        await agent.run(paso)
+    return agent.command("/fin")  # type: ignore[return-value]
+
+
+async def test_ensenado_con_un_canal_funciona_con_otro_sin_el_planificador() -> None:
+    pc, store = FakePC(), RecipeStore(":memory:")
+    llm = FakeLLM(*guion_hrom())
+    async with Client(pc.server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        fin = await ensenar(agent)
+        assert fin.startswith("Aprendida la receta n.º 1: «<dame> el video mas visto del canal {canal}»")
+        llamadas_al_ensenar = len(llm.seen)
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+
+    assert resultado.metrics.route == "receta" and len(llm.seen) == llamadas_al_ensenar  # sin el modelo
+    assert pc.site.url.startswith("https://www.youtube.com/watch")
+    assert "lofigirl: récord absoluto" in pc.site.title.lower()  # el más visto de ESE canal (98000 visualizaciones)
+    assert [s.tool for s in resultado.steps] == [
+        "web.site_search",  # ya trae la página: no hace falta un snapshot
+        "browser.click",
+        "browser.click",
+        "browser.click",
+        "browser.click",
+    ]
+    assert (
+        resultado.answer.startswith("Hecho como me enseñaste")
+        and "lofigirl: récord absoluto" in resultado.answer.lower()
+    )
+    receta = store.all()[0]
+    assert receta.origin == "enseñada" and receta.steps[0].args == {"sitio": "YouTube", "consulta": "{canal}"}
+    assert [s.target.describe() for s in receta.steps[1:]] == [  # type: ignore[union-attr]
+        'link "ir al canal {canal}"',  # en los resultados de Hrom el enlace dice «Ir al canal Hrom»
+        'tab "videos"',
+        'button "populares"',
+        "link n.º 1 (/watch)",
+    ]
+
+
+async def test_mientras_se_ensena_no_se_reproducen_ni_se_aprenden_otras_recetas() -> None:
+    store = RecipeStore(":memory:")
+    llm = FakeLLM(llamar("apps_open", nombre="Spotify"), llamar("apps_open", nombre="Paint"))
+    async with Client(FakePC().server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        agent.command("/aprender abre mis apps de música")
+        await agent.run("abre Spotify")
+        await agent.run("abre Paint")  # sin /aprender, la de «abre Spotify» ya se habría guardado y reproducido
+        assert store.all() == [] and len(llm.seen) == 2
+        fin = agent.command("/fin")
+    assert fin is not None and "apps.open(nombre='Spotify')" in fin and "apps.open(nombre='Paint')" in fin
+    assert store.all()[0].trigger == "<abr*> mis apps de musica"
+
+
+async def test_cancelar_descarta_y_fin_sin_pasos_no_guarda() -> None:
+    store = RecipeStore(":memory:")
+    llm = FakeLLM(llamar("apps_open", nombre="Spotify"))
+    async with Client(FakePC().server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        agent.command("/aprender abre lo mío")
+        await agent.run("abre Spotify")
+        assert agent.command("/cancelar") == "Descartado: no he guardado nada."
+        assert (
+            agent.command(
+                "/fin",
+            )
+            == "No estaba aprendiendo nada. Empieza con /aprender <frase>."
+        )
+        agent.command("/aprender algo")
+        assert agent.command("/fin") == "No he guardado nada: no hubo ningún paso que se pueda repetir."
+    assert store.all() == []
+
+
+async def test_los_comandos_pasan_por_la_sesion_sin_llamar_al_modelo() -> None:
+    salidas: list[str] = []
+    lineas = iter(["/aprender pon lo mío", "/cancelar", "/recetas", "salir"])
+
+    async def leer() -> str:
+        return next(lineas)
+
+    llm = FakeLLM()
+    async with Client(FakePC().server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=RecipeStore(":memory:"))
+        await Session(salidas.append).serve(agent, leer)
+    assert salidas[0].startswith("Grabando «pon lo mío»")
+    assert salidas[1:] == ["Descartado: no he guardado nada.", "No hay recetas aprendidas."]
+    assert llm.seen == []
+
+
+async def test_fin_avisa_de_los_pasos_guiados_que_no_salieron_bien() -> None:
+    store = RecipeStore(":memory:")
+    llm = FakeLLM(llamar("apps_open", nombre="Spotify"), llamar("browser_click", ref="e99"), decir("Hecho."))
+    async with Client(FakePC().server()) as client:
+        agent = Agent(llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        agent.command("/aprender pon lo mío")
+        await agent.run("abre Spotify")
+        await agent.run("pulsa el botón raro")
+        fin = agent.command("/fin")
+    assert fin is not None and fin.endswith("Aviso: «pulsa el botón raro» no salió bien y no se ha grabado.")
+
+
+async def test_si_la_receta_falla_dice_en_que_paso_y_el_planificador_sigue_desde_ahi() -> None:
+    pc, store = FakePC(), RecipeStore(":memory:")
+    pc.site.layouts["nadie"] = "sin"  # su canal no sale en los resultados
+    notas: list[str] = []
+    llm = FakeLLM(*guion_hrom(), decir("No encuentro ese canal en los resultados."))
+    async with Client(pc.server()) as client:
+        agent = Agent(
+            llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append, page_wait=0.04
+        )
+        await ensenar(agent)
+        resultado = await agent.run("dame el vídeo más visto del canal Nadie")
+    nota = "receta n.º 1 → falló en paso 2/5: no encontré link «ir al canal Nadie»; sigo con el planificador"
+    assert notas and nota in notas[0] and nota in resultado.metrics.recipe_note
+    assert resultado.metrics.route == "planificador" and resultado.metrics.recipe == 1
+    # el planificador ve lo ya hecho (búsqueda y página) y la pista con lo que faltaba, sin empezar de cero
+    visto = llm.seen[-1]
+    pista = next(m.content for m in reversed(visto) if m.role == "user")
+    assert "Sigue DESDE LA PÁGINA ACTUAL" in pista
+    assert "pulsa link «ir al canal Nadie»; pulsa tab «videos»; pulsa button «populares»; pulsa link n.º 1" in pista
+    assert any(m.role == "tool" and "Nadie - mejores momentos" in m.content for m in visto)
+    assert store.all()[0].failures == 1
+
+
+async def test_el_enlace_al_canal_se_encuentra_aunque_se_escriba_distinto() -> None:
+    from core.recipes import Target, resolve_target
+
+    canal = Target("link", "ir al canal {canal}", "/@")
+    pagina = (
+        '[e1] link "Lofi Girl - lo mejor" -> /watch?v=1\n'
+        '[e2] link "@LofiGirl · 1,5 M de suscriptores" -> /@LofiGirl\n'
+        '[e3] link "Otro canal" -> /@otro'
+    )
+    assert resolve_target(canal, pagina, {"canal": "Lofi Girl"}) == "e2"  # por el perfil @LofiGirl
+    titulo = '[e1] link "Lofi Girl - lo mejor" -> /watch?v=1\n[e2] link "Lofi Girl" -> /@lofi'
+    assert resolve_target(canal, titulo, {"canal": "lofi girl"}) == "e2"  # el nombre contiene el valor
+    chip = '[e1] button "Populares"'
+    assert resolve_target(Target("tab", "populares"), chip, {}) == "e1"  # mismo chip, otro rol
+
+
+async def test_la_frase_de_la_receta_no_se_comprueba_como_un_nombre_de_la_pagina() -> None:
+    """Caso real: tras la receta salió «(Aviso: «dame el vídeo más visto del canal Hrom» no coincide literalmente…)»."""
+    pc, store = FakePC(), RecipeStore(":memory:")
+    async with Client(pc.server()) as client:
+        agent = Agent(FakeLLM(*guion_hrom()), McpTools(client), policy=ConfirmationPolicy.load(), recipes=store)
+        await ensenar(agent)
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert resultado.answer.startswith("Hecho como me enseñaste") and "Aviso" not in resultado.answer
+
+
+async def test_si_la_lista_tarda_en_pintarse_se_espera_y_se_reintenta_sin_fallar() -> None:
+    """Caso real (aula): Lofi Girl falló una vez en el paso 2 y a la segunda fue bien: la lista aún no estaba."""
+    pc, store = FakePC(), RecipeStore(":memory:")
+    async with Client(pc.server()) as client:
+        agent = Agent(
+            FakeLLM(*guion_hrom()), McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, page_wait=0.04
+        )
+        await ensenar(agent)
+        pc.site.slow_reads = 2  # la búsqueda y el primer vistazo ven la página vacía
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert resultado.metrics.route == "receta" and resultado.answer.startswith("Hecho como me enseñaste")
+    assert [s.tool for s in resultado.steps].count("browser.snapshot") == 2
+    assert store.all()[0].failures == 0
+
+
+async def test_si_la_pagina_no_llega_a_cargar_no_cuenta_como_fallo_de_la_receta() -> None:
+    pc, store = FakePC(), RecipeStore(":memory:")
+    llm = FakeLLM(*guion_hrom(), decir("La página no ha cargado."))
+    notas: list[str] = []
+    async with Client(pc.server()) as client:
+        agent = Agent(
+            llm, McpTools(client), policy=ConfirmationPolicy.load(), recipes=store, on_note=notas.append, page_wait=0.04
+        )
+        await ensenar(agent)
+        pc.site.slow_reads = 99
+        resultado = await agent.run("dame el vídeo más visto del canal Lofi Girl")
+    assert "la página no terminó de cargar" in resultado.metrics.recipe_note
+    assert store.all()[0].failures == 0 and store.all()[0].enabled

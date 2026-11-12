@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from core.agent import SYSTEM_PROMPT, Step, _grounded
+from core.agent import SYSTEM_PROMPT, Agent, Step, _grounded
 from hands.browser.rules import BrowserRules
-from tests.test_agent import FakeLLM, decir, llamar
+from tests.test_agent import POLICY, FakeBackend, FakeLLM, decir, llamar
 from tests.test_browser import FakePage
 from tests.test_browser_safety import aprobar, ejecutar_con
 
@@ -362,3 +362,84 @@ def test_frases_normales_con_no_hay_no_se_tocan(respuesta: str) -> None:
     from core.agent import _grounded
 
     assert _grounded(respuesta, []) == respuesta
+
+
+# --- cierres que no ocurrieron ------------------------------------------------------------------------------------
+
+
+async def test_no_puede_decir_que_ha_cerrado_algo_sin_haberlo_cerrado() -> None:
+    """Caso real (banco, 2026-11-12): buscó la calculadora en vez de cerrarla y contestó «He cerrado la calculadora»."""
+
+    backend = FakeBackend({"apps.search": '{"ok": true, "resultados": []}'})
+    llm = FakeLLM(llamar("apps_search", nombre="calculadora"), decir("No está abierta. He cerrado la calculadora."))
+    resultado = await Agent(llm, backend, policy=POLICY).run("cierra la calculadora")
+    assert resultado.answer.startswith("No he cerrado nada")
+
+
+async def test_si_el_cierre_se_comprobo_puede_decirlo() -> None:
+
+    backend = FakeBackend(
+        {"apps.close": '{"ok": true, "cerrada": true, "mensaje": "He cerrado Paint."}'}, ("apps.close",)
+    )
+    llm = FakeLLM(llamar("apps_close", id="paint"), decir("He cerrado Paint y algo más."))
+    resultado = await Agent(llm, backend, policy=POLICY).run("cierra paint y dime la hora")
+    assert resultado.answer == "He cerrado Paint y algo más."
+
+
+# --- superlativos que nadie pidió ----------------------------------------------------------------------------------
+
+PESTANA_VIDEOS = json.dumps(
+    {
+        "ok": True,
+        "url_cambio": True,
+        "cambio_visible": True,
+        "objetivo": "Vídeos",
+        "criterio": [],
+        "url": "https://www.youtube.com/@hrom/videos",
+        "titulo": "Hrom - YouTube",
+        "pagina": '[CONTENIDO DE LA PÁGINA]\n[e5] button "Más recientes"\n[e6] button "Populares"',
+    }
+)
+
+
+def test_describir_una_etiqueta_de_la_pagina_no_es_afirmar_un_superlativo() -> None:
+    """Caso real (/aprender, «pestaña vídeos»): avisó de «no he podido comprobar que sea el más reciente»."""
+    pasos = [Step("browser.click", {"ref": "e3"}, PESTANA_VIDEOS, True)]
+    texto = "Estoy en la pestaña Vídeos; ahora salen por Más recientes."
+    assert _grounded(texto, pasos, "pestaña vídeos") == texto
+
+
+def test_si_el_usuario_pide_el_mas_reciente_se_sigue_exigiendo_la_ordenacion() -> None:
+    pasos = [Step("browser.click", {"ref": "e3"}, PESTANA_VIDEOS, True)]
+    texto = "Este es el más reciente."
+    assert _grounded(texto, pasos, "dame el vídeo más reciente").startswith("No he podido comprobar")
+
+
+# --- abrir el enlace pulsado -----------------------------------------------------------------------------------------
+
+
+def test_si_la_url_nueva_es_la_del_enlace_pulsado_cuenta_como_abierto() -> None:
+    """Caso real: abrió el primer vídeo (/watch?v=...) y dijo «no he abierto … sigo en …/watch?v=…»."""
+    lista = json.dumps(
+        {
+            "ok": True,
+            "url": "https://www.youtube.com/@hrom/videos",
+            "titulo": "Hrom - YouTube",
+            "pagina": '[CONTENIDO DE LA PÁGINA]\n[e7] link "Hrom: el récord absoluto del canal" -> /watch?v=abc',
+        }
+    )
+    video = json.dumps(
+        {
+            "ok": True,
+            "url_cambio": True,
+            "objetivo": "Hrom: el récord absoluto del canal",
+            "enlace": "https://www.youtube.com/watch?v=abc",
+            "criterio": [],
+            "url": "https://www.youtube.com/watch?v=abc",
+            "titulo": "YouTube",  # aún cargando
+            "pagina": '[CONTENIDO DE LA PÁGINA]\n[e1] button "Me gusta"',
+        }
+    )
+    pasos = [Step("browser.snapshot", {}, lista, True), Step("browser.click", {"ref": "e7"}, video, True)]
+    texto = "He abierto «Hrom: el récord absoluto del canal»."
+    assert _grounded(texto, pasos, "abre el primero") == texto

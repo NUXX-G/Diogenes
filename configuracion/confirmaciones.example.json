@@ -41,13 +41,17 @@
     },
     "herramientas": {
       "apps.launch": {"verbos": ["abrir"], "objetivo": "app"},
+      "apps.open": {"verbos": ["abrir"], "objetivo": "app"},
       "apps.close": {"verbos": ["cerrar"], "objetivo": "app"},
     "apps.force_close": {"verbos": ["cerrar"], "objetivo": "app"},
       "web.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "browser.open": {"verbos": ["abrir", "navegar"], "objetivo": "url"},
       "web.site_search": {"verbos": ["buscar", "abrir", "navegar"], "objetivo": "sitio"}
     },
-    "bloqueadas_al_cerrar": ["apps.launch"],
+    "bloqueadas_al_cerrar": ["apps.launch", "apps.open"],
+    "no_verbos": ["abierto", "abierta", "abiertos", "abiertas", "abiertamente", "cerrado", "cerrada", "cerrados", "cerradas"],
+    "estado": ["abierto", "abierta", "abiertos", "abiertas", "encendido", "encendida", "funcionando", "ejecutandose", "corriendo", "open", "running"],
+    "palabras_de_modo": ["fuerza", "forzando", "forzar", "forzado", "forzosamente", "ya", "todo", "del", "si", "hay", "esta", "estan", "tengo", "que", "algun", "alguna"],
     "libres_en_web": ["browser.click", "browser.type"],
     "palabras_genericas": ["de", "del", "la", "el", "los", "las", "app", "apps", "application", "aplicacion", "microsoft", "windows", "google", "the", "for", "desktop", "classic", "new", "version", "launcher"]
   },

@@ -135,6 +135,14 @@ class AppCloser:
             return folder_windows(entry, windows)
         return [w for w in windows if matches(entry, w)]
 
+    def windows_of(self, entry: AppEntry) -> list[Win]:
+        """Las ventanas abiertas de esa app (para enseñar sus títulos antes de cerrarla)."""
+        return self._windows_of(entry)
+
+    def open_windows(self) -> list[Win]:
+        """Las ventanas abiertas que no son de Diogenes ni del sistema."""
+        return [w for w in self._backend.list_windows() if not self._protected(w)]
+
     def is_open(self, entry: AppEntry) -> bool:
         """¿Tiene alguna ventana abierta ahora mismo?"""
         return bool(self._windows_of(entry))
@@ -226,10 +234,19 @@ class AppCloser:
         now = time.monotonic()
         pids = {w.pid for w in wins}
         if not all(now - self._soft_tried.get(pid, -SOFT_MEMORY_SECONDS) < SOFT_MEMORY_SECONDS for pid in pids):
-            return {
-                "ok": False,
-                "mensaje": f"Antes hay que intentar cerrar {entry.name} con apps.close; solo se fuerza si sigue abierta.",
-            }
+            # El usuario ya ha confirmado forzar: primero se pide cerrar como con la X, y solo si sigue abierta se fuerza.
+            for win in wins:
+                self._backend.post_close(win.hwnd)
+            for pid in pids:
+                self._soft_tried[pid] = now
+            wins = self._wait_until_closed(wins)
+            if not wins:
+                return {
+                    "ok": True,
+                    "cerrada": True,
+                    "mensaje": f"He cerrado {entry.name} (no ha hecho falta forzarlo).",
+                }
+            pids = {w.pid for w in wins}
         failed = [pid for pid in pids if not self._backend.terminate(pid)]
         for pid in pids - set(failed):
             self._soft_tried.pop(pid, None)

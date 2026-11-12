@@ -1,0 +1,234 @@
+[
+  {
+    "pasada": 1,
+    "orden": "abre Spotify",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4161,
+    "tokens_salida": 23,
+    "segundos_modelo": 133.16,
+    "segundos_resto": 0.069,
+    "segundos_total": 133.22,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.open"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He abierto Spotify."
+  },
+  {
+    "pasada": 1,
+    "orden": "cierra la calculadora",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4260,
+    "tokens_salida": 23,
+    "segundos_modelo": 10.1,
+    "segundos_resto": 0.005,
+    "segundos_total": 10.1,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.close"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He cerrado Calculadora."
+  },
+  {
+    "pasada": 1,
+    "orden": "búscame en YouTube cómo hacer mochis",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4353,
+    "tokens_salida": 34,
+    "segundos_modelo": 13.12,
+    "segundos_resto": 0.005,
+    "segundos_total": 13.12,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He buscado «cómo hacer mochis» en YouTube."
+  },
+  {
+    "pasada": 1,
+    "orden": "pausa el vídeo de YouTube",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4587,
+    "tokens_salida": 27,
+    "segundos_modelo": 15.33,
+    "segundos_resto": 0.003,
+    "segundos_total": 15.33,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "media.control"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho y comprobado: Chrome ahora está en pausa."
+  },
+  {
+    "pasada": 1,
+    "orden": "dame el vídeo más visto del canal Hrom",
+    "ruta": "planificador",
+    "llamadas_modelo": 7,
+    "tokens_entrada": 37836,
+    "tokens_salida": 158,
+    "segundos_modelo": 149.24,
+    "segundos_resto": 0.015,
+    "segundos_total": 149.25,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo más visto del canal Hrom, tras ordenar por Populares."
+  },
+  {
+    "pasada": 1,
+    "orden": "dame el vídeo más visto del canal Lofi Girl",
+    "ruta": "planificador",
+    "llamadas_modelo": 7,
+    "tokens_entrada": 41884,
+    "tokens_salida": 160,
+    "segundos_modelo": 156.1,
+    "segundos_resto": 0.013,
+    "segundos_total": 156.11,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo más visto del canal Lofi Girl, tras ordenar por Populares."
+  },
+  {
+    "pasada": 2,
+    "orden": "abre Spotify",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 5911,
+    "tokens_salida": 23,
+    "segundos_modelo": 8.37,
+    "segundos_resto": 0.002,
+    "segundos_total": 8.37,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.open"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He abierto Spotify."
+  },
+  {
+    "pasada": 2,
+    "orden": "cierra la calculadora",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 6010,
+    "tokens_salida": 23,
+    "segundos_modelo": 10.1,
+    "segundos_resto": 0.003,
+    "segundos_total": 10.1,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "apps.close"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He cerrado Calculadora."
+  },
+  {
+    "pasada": 2,
+    "orden": "búscame en YouTube cómo hacer mochis",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 4981,
+    "tokens_salida": 34,
+    "segundos_modelo": 35.33,
+    "segundos_resto": 0.003,
+    "segundos_total": 35.33,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "web.site_search"
+    ],
+    "confirmaciones": [],
+    "respuesta": "He buscado «cómo hacer mochis» en YouTube."
+  },
+  {
+    "pasada": 2,
+    "orden": "pausa el vídeo de YouTube",
+    "ruta": "planificador",
+    "llamadas_modelo": 1,
+    "tokens_entrada": 5214,
+    "tokens_salida": 27,
+    "segundos_modelo": 15.33,
+    "segundos_resto": 0.002,
+    "segundos_total": 15.33,
+    "respuesta_sin_modelo": true,
+    "herramientas": [
+      "media.control"
+    ],
+    "confirmaciones": [],
+    "respuesta": "Hecho y comprobado: Chrome ahora está en pausa."
+  },
+  {
+    "pasada": 2,
+    "orden": "dame el vídeo más visto del canal Hrom",
+    "ruta": "planificador",
+    "llamadas_modelo": 7,
+    "tokens_entrada": 41850,
+    "tokens_salida": 158,
+    "segundos_modelo": 174.42,
+    "segundos_resto": 0.013,
+    "segundos_total": 174.43,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo más visto del canal Hrom, tras ordenar por Populares."
+  },
+  {
+    "pasada": 2,
+    "orden": "dame el vídeo más visto del canal Lofi Girl",
+    "ruta": "planificador",
+    "llamadas_modelo": 7,
+    "tokens_entrada": 45747,
+    "tokens_salida": 160,
+    "segundos_modelo": 156.1,
+    "segundos_resto": 0.013,
+    "segundos_total": 156.11,
+    "respuesta_sin_modelo": false,
+    "herramientas": [
+      "web.site_search",
+      "browser.snapshot",
+      "browser.click",
+      "browser.click",
+      "browser.click",
+      "browser.click"
+    ],
+    "confirmaciones": [
+      "web.site_search"
+    ],
+    "respuesta": "He abierto el vídeo más visto del canal Lofi Girl, tras ordenar por Populares."
+  }
+]

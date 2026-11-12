@@ -65,11 +65,10 @@ async def test_flujo_buscar_y_lanzar_con_hands_real_en_proceso() -> None:
     llm = FakeLLM(
         llamar("apps_search", nombre="brawlhalla"),
         llamar("apps_launch", id="steam:291550"),
-        decir("Brawlhalla abierto."),
     )
     async with Client(build_server(index, launch=lanzadas.append)) as client:
         resultado = await Agent(llm, McpTools(client), policy=POLICY).run("abre Brawlhalla")
-    assert resultado.answer == "Brawlhalla abierto."
+    assert resultado.answer == "He abierto Brawlhalla."  # lanzada y verificada: sin modelo
     assert [s.tool for s in resultado.steps] == ["apps.search", "apps.launch"]
     assert all(s.ok for s in resultado.steps)
     assert [e.id for e in lanzadas] == ["steam:291550"]
@@ -204,9 +203,7 @@ async def test_secuencia_del_fallo_original_con_empate_y_eleccion_posterior() ->
         # turno 1: "abre discord" → empate → el modelo pregunta
         llamar("apps_search", nombre="discord"),
         decir("¿Cuál? 1. Discord Canary 2. Discord PTB 3. Discord Dev"),
-        # turno 2: "el segundo" → se resuelve en código, el modelo solo lanza
-        llamar("apps_launch", id=segunda_opcion.id),
-        decir("Abierto."),
+        # turno 2: "el segundo" → se resuelve y se lanza en código, sin el modelo
     )
     async with Client(build_server(indice_discord(), launch=lanzadas.append)) as client:
         agente = Agent(llm, McpTools(client), policy=POLICY)
@@ -214,16 +211,15 @@ async def test_secuencia_del_fallo_original_con_empate_y_eleccion_posterior() ->
         segunda = await agente.run("el segundo")
 
     assert primera.answer.startswith("¿Cuál?")
-    assert segunda.answer == "Abierto."
+    assert segunda.answer == f"He abierto {segunda_opcion.name}."
     assert [e.id for e in lanzadas] == [segunda_opcion.id]
     # al modelo le llega la petición original + la opción ya resuelta, no un "el segundo" huérfano
-    turno2 = llm.seen[2]
-    assert usuario_de(turno2)[0] == "abre discord"
-    assert "opción 2" in usuario_de(turno2)[1] and segunda_opcion.id in usuario_de(turno2)[1]
-    # y ve todo lo anterior: su búsqueda, el resultado con las opciones y su pregunta
-    roles = [m.role for m in turno2]
-    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
-    assert "opciones" in turno2[3].content
+    assert len(llm.seen) == 2  # el modelo no interviene en la elección
+    assert segunda.metrics.route == "eleccion"
+    # el historial queda como si el modelo hubiera lanzado la opción elegida (para "ciérralo" después)
+    roles = [m.role for m in agente.history]
+    assert roles == ["user", "assistant", "tool", "assistant", "user", "assistant", "tool", "assistant"]
+    assert "opción 2" in agente.history[4].content and segunda_opcion.id in agente.history[4].content
 
 
 async def test_la_app_y_el_primero_con_historial_no_vuelven_a_buscar_desde_cero() -> None:
@@ -247,7 +243,6 @@ async def test_la_eleccion_pendiente_se_consume_una_sola_vez() -> None:
     llm = FakeLLM(
         llamar("apps_search", nombre="discord"),
         decir("¿Cuál?"),
-        decir("hecho"),
         decir("vale"),
     )
     async with Client(build_server(indice_discord(), launch=lambda _e: None)) as client:
@@ -255,7 +250,7 @@ async def test_la_eleccion_pendiente_se_consume_una_sola_vez() -> None:
         await agente.run("abre discord")
         await agente.run("el primero")
         await agente.run("el primero")  # ya no hay lista pendiente: es texto normal
-    assert usuario_de(llm.seen[3])[-1] == "el primero"
+    assert usuario_de(llm.seen[2])[-1] == "el primero"
 
 
 async def test_el_historial_guarda_mensajes_llamadas_y_resultados() -> None:
@@ -341,11 +336,11 @@ async def test_llamadas_identicas_en_una_respuesta_se_ejecutan_una_vez() -> None
     bucle = LLMResponse("", tuple(ToolCall("apps_launch", {"id": "startapps:967ad27c"}) for _ in range(9)))
     backend = FakeBackend()
     llm = FakeLLM(bucle, decir("abierto"))
-    gate = IntentGate.load()
+    gate = IntentGate.load()  # "abre el editor y dime qué es": pide algo más, así que el modelo vuelve a hablar
     gate.observe(
         "apps.search", {}, json.dumps({"ok": True, "resultados": [{"id": "startapps:967ad27c", "nombre": "Editor"}]})
     )
-    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor")
+    resultado = await Agent(llm, backend, policy=POLICY, intent=gate).run("abre el editor y dime qué es")
     assert backend.calls == [("apps.launch", {"id": "startapps:967ad27c"})]
     assert len(resultado.steps) == 1
     # el historial refleja lo que realmente se ejecutó, no las nueve copias
@@ -368,5 +363,5 @@ async def test_si_ante_varias_opciones_vuelve_a_preguntar_sin_llamar_al_modelo()
         assert r.answer.startswith("Eso no me dice cuál") and "1. " in r.answer and "3. " in r.answer
         assert len(llm.seen) == 2  # el modelo no vio el "sí"
         # la lista sigue pendiente: ahora sí se puede elegir
-        await agente.run("el primero")
-    assert "opción 1" in usuario_de(llm.seen[2])[-1]
+        r = await agente.run("el primero")
+    assert r.answer.startswith("He abierto Discord") and len(llm.seen) == 2
