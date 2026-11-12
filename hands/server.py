@@ -384,7 +384,10 @@ def build_server(
                 if not nombre.strip():
                     wins = await asyncio.to_thread(closer.open_windows)
                     items = [{"titulo": w.title, "proceso": w.exe_name} for w in wins[:20]]
-                    return {"ok": True, "mensaje": f"{len(wins)} ventanas abiertas", "abiertas": items}
+                    listed = "; ".join(w.title for w in wins[:10])
+                    more = f" y {len(wins) - 10} más" if len(wins) > 10 else ""
+                    mensaje = f"{len(wins)} ventanas abiertas: {listed}{more}." if wins else "No hay ventanas abiertas."
+                    return {"ok": True, "mensaje": mensaje, "abiertas": items}
                 if (waiting := await not_ready()) is not None:
                     return waiting
                 found = await open_apps(nombre)

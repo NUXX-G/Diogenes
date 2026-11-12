@@ -600,18 +600,26 @@ def _unverified_media_claim(answer: str, steps: list[Step]) -> str | None:
     return f"{done}; no puedo comprobar si ha cambiado lo que suena, así que no sé si está sonando o en pausa."
 
 
-CLOSED_CLAIM = re.compile(r"\b(?:he cerrado|cerr[eé]|se ha cerrado|ya est[aá] cerrad[oa])\b", re.IGNORECASE)
+CLOSED_CLAIM = re.compile(
+    r"\b(?:he cerrado|cerr[eé]|se ha cerrado|ya est[aá] cerrad[oa]|he forzado(?: el cierre)?|forc[eé])\b",
+    re.IGNORECASE,
+)
 
 
 def _unchecked_close(answer: str, steps: list[Step]) -> str | None:
-    """Dice que ha cerrado algo sin que ninguna herramienta de cierre lo haya conseguido en este turno."""
+    """Dice que ha cerrado (o forzado) algo sin que ninguna herramienta de cierre lo haya conseguido en este turno."""
     if not CLOSED_CLAIM.search(answer):
         return None
-    closed = any(
-        s.tool in ("apps.close", "apps.force_close") and (_json_dict(s.result) or {}).get("cerrada") is True
-        for s in steps
-    )
-    return None if closed else "No he cerrado nada: en este turno ninguna app se ha llegado a cerrar."
+    closing = [(s, _json_dict(s.result) or {}) for s in steps if s.tool in ("apps.close", "apps.force_close")]
+    if any(data.get("cerrada") is True for _, data in closing):
+        return None
+    still_open = next((data for _, data in reversed(closing) if data.get("sigue_abierta") is True), None)
+    if still_open is not None:
+        return (
+            f"No la he cerrado: {still_open.get('mensaje', 'sigue abierta')} Si quieres perder los cambios, dime "
+            "«ciérralo a la fuerza» y te pediré confirmación."
+        )
+    return "No he cerrado nada: en este turno ninguna app se ha llegado a cerrar."
 
 
 def _asked_criteria(request: str | None) -> set[str]:
@@ -1453,6 +1461,14 @@ class Agent:
         if not aliased and (via_alias := await self._via_alias(name, call, to_mcp)) is not None:
             return via_alias
         call = self._named_close_target(name, call)
+        # «¿está abierto el bloc de notas?» mirado sin nombre: la lista entera no contesta la pregunta
+        state_query = name == OPEN_APPS_TOOL and not call.arguments.get("nombre")
+        if (
+            state_query
+            and self._intent.asking_state(self._request)
+            and (target := self._intent.state_target(self._request))
+        ):
+            call = ToolCall(call.name, {**call.arguments, "nombre": target})
         asked = False
         verdict = self._intent.check(name, call.arguments)
         if verdict.blocked:

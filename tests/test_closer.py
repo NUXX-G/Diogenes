@@ -647,3 +647,23 @@ async def test_el_modelo_no_ve_el_id_de_los_cierres(servidor_con_bloc: Any) -> N
         await Agent(llm, McpTools(client), policy=ConfirmationPolicy([])).run("hola")
     cierres = {t.name: t.parameters["properties"] for t in llm.tools_seen[0] if t.name.startswith("apps_")}
     assert "id" not in cierres["apps_close"] and "nombre" in cierres["apps_force_close"]
+
+
+async def test_preguntar_si_esta_abierto_sin_nombre_se_mira_con_el_nombre_del_mensaje() -> None:
+    """Caso real: el modelo llamó a apps_abiertas sin nombre y contestó «2 ventanas abiertas»."""
+    server, _ = servidor_bloc_y_explorador()
+    async with Client(server) as client:
+        agent = Agent(FakeLLM(llamar("apps_abiertas")), McpTools(client), policy=ConfirmationPolicy([]))
+        resultado = await agent.run("busca si hay un bloc de notas abierto")
+    assert resultado.steps[0].arguments == {"nombre": "bloc de notas"}
+    assert resultado.answer == "Sí, está abierto: Bloc de notas (1 ventana: Sin título)."
+
+
+async def test_no_puede_decir_que_ha_forzado_el_cierre_sin_haberlo_hecho() -> None:
+    """Caso real: «ciérralo» → la app pidió guardar (sigue abierta) y el modelo dijo «He forzado el cierre»."""
+    sigue = json.dumps({"ok": True, "cerrada": False, "sigue_abierta": True, "mensaje": "Bloc de notas sigue abierta."})
+    backend = FakeBackend({"apps.close": sigue}, names=("apps.close",))
+    llm = FakeLLM(llamar("apps_close", nombre="bloc de notas"), decir("Sigue abierta. He forzado el cierre del Bloc."))
+    resultado = await Agent(llm, backend, policy=ConfirmationPolicy([])).run("cierra el bloc de notas")
+    assert resultado.answer.startswith("No la he cerrado: Bloc de notas sigue abierta.")
+    assert "a la fuerza" in resultado.answer
