@@ -219,12 +219,12 @@ def target_from(page: str, ref: str, slots: dict[str, str], ordinal_hint: int | 
         return None
     name = normalize(item.name.rstrip("…"))
     form = shape(item.href)
+    if ordinal_hint:  # "abre el primero": manda la posición, aunque el título nombre al canal
+        same = [i for i in items if i.role == item.role and shape(i.href) == form]
+        return Target(item.role, "", form, same.index(item) + 1)
     for value, slot in sorted(slots.items(), key=lambda kv: -len(kv[0])):
         if value and f" {value} " in f" {name} ":
             return Target(item.role, f" {name} ".replace(f" {value} ", f" {{{slot}}} ").strip(), form)
-    if ordinal_hint:
-        same = [i for i in items if i.role == item.role and shape(i.href) == form]
-        return Target(item.role, "", form, same.index(item) + 1)
     return Target(item.role, name, form)
 
 
