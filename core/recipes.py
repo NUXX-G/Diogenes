@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -29,6 +30,8 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from hands.apps.models import normalize
+from hands.apps.usage import SCHEMA as USAGE_SCHEMA
+from hands.apps.usage import decayed
 
 CONFIG_DIR = Path("configuracion")
 SLOT = re.compile(r"\{(\w+)\}")
@@ -50,6 +53,8 @@ class RecipeConfig:
     read_only: frozenset[str] = frozenset(
         {"apps.search", "apps.abiertas", "browser.snapshot", "browser.current", "media.sessions"}
     )
+    promote_after: int = 5  # éxitos seguidos, sin ningún fallo, para pasar a atajo
+    half_life_days: float = 14.0  # el uso se reduce a la mitad cada tantos días
 
     @classmethod
     def load(cls, directory: Path = CONFIG_DIR) -> RecipeConfig:
@@ -66,6 +71,8 @@ class RecipeConfig:
                     frozenset(normalize(c) for c in data.get("correcciones", [])),
                     {normalize(k): int(v) for k, v in data.get("ordinales", {}).items()},
                     frozenset(data.get("solo_lectura", cls.read_only)),
+                    int(data.get("exitos_para_atajo", 5)),
+                    float(data.get("vida_media_dias", 14)),
                 )
         return cls()
 
@@ -389,6 +396,8 @@ class Recipe:
     streak: int = 0  # fallos seguidos
     enabled: bool = True
     last_used: str = ""
+    wins: int = 0  # éxitos seguidos
+    promoted: bool = False  # ascendida a atajo del router
 
     @property
     def slots(self) -> list[str]:
@@ -692,6 +701,11 @@ class RecipeStore:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(path))
         self._db.executescript(_SCHEMA)
+        self._db.execute(USAGE_SCHEMA)
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(recipes)")}
+        for column in ("wins", "promoted"):  # bases creadas antes del ascenso a atajo
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE recipes ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
         self.merge_duplicates()
 
@@ -730,14 +744,14 @@ class RecipeStore:
 
     @staticmethod
     def _row(row: tuple[Any, ...]) -> Recipe:
-        rid, trigger, example, steps, origin, ok, ko, streak, enabled, last = row
+        rid, trigger, example, steps, origin, ok, ko, streak, enabled, last, wins, promoted = row
         parsed = [RecipeStep.from_dict(s) for s in json.loads(steps)]
-        return Recipe(trigger, example, parsed, origin, rid, ok, ko, streak, bool(enabled), last)
+        return Recipe(trigger, example, parsed, origin, rid, ok, ko, streak, bool(enabled), last, wins, bool(promoted))
 
     def all(self) -> list[Recipe]:
         rows = self._db.execute(
-            "SELECT id, trigger, example, steps, origin, successes, failures, streak, enabled, last_used "
-            "FROM recipes ORDER BY id"
+            "SELECT id, trigger, example, steps, origin, successes, failures, streak, enabled, last_used, wins, "
+            "promoted FROM recipes ORDER BY id"
         ).fetchall()
         return [self._row(r) for r in rows]
 
@@ -752,7 +766,8 @@ class RecipeStore:
                 trigger = merged_trigger(old.trigger, recipe.trigger) or merged_trigger(recipe.trigger, old.trigger)
                 if trigger is not None:
                     self._db.execute(
-                        "UPDATE recipes SET trigger = ?, successes = successes + 1, streak = 0, enabled = 1 "
+                        "UPDATE recipes SET trigger = ?, successes = successes + 1, streak = 0, enabled = 1, "
+                        "wins = wins + 1 "
                         "WHERE id = ?",
                         (trigger, old.id),
                     )
@@ -760,9 +775,9 @@ class RecipeStore:
                     return int(old.id)  # type: ignore[arg-type]
         steps = json.dumps([s.as_dict() for s in recipe.steps], ensure_ascii=False)
         self._db.execute(
-            "INSERT INTO recipes (trigger, example, steps, origin, successes) VALUES (?, ?, ?, ?, 1) "
+            "INSERT INTO recipes (trigger, example, steps, origin, successes, wins) VALUES (?, ?, ?, ?, 1, 1) "
             "ON CONFLICT(trigger) DO UPDATE SET example = excluded.example, steps = excluded.steps, "
-            "origin = excluded.origin, successes = 1, failures = 0, streak = 0, enabled = 1, "
+            "origin = excluded.origin, successes = 1, failures = 0, streak = 0, enabled = 1, wins = 1, promoted = 0, "
             "created_at = CURRENT_TIMESTAMP",
             (recipe.trigger, recipe.example, steps, recipe.origin),
         )
@@ -774,17 +789,23 @@ class RecipeStore:
         query = "SELECT 1 FROM recipes WHERE trigger = ?" + (" AND enabled = 1" if enabled_only else "")
         return self._db.execute(query, (trigger,)).fetchone() is not None
 
-    def success(self, recipe_id: int) -> None:
+    def success(self, recipe_id: int, promote_after: int = 5) -> bool:
+        """Suma un éxito. Con `promote_after` seguidos y ningún fallo, se asciende a atajo. Devuelve si está ascendida."""
         self._db.execute(
-            "UPDATE recipes SET successes = successes + 1, streak = 0, last_used = CURRENT_TIMESTAMP WHERE id = ?",
-            (recipe_id,),
+            "UPDATE recipes SET successes = successes + 1, streak = 0, wins = wins + 1, "
+            "promoted = CASE WHEN wins + 1 >= ? AND failures = 0 THEN 1 ELSE promoted END, "
+            "last_used = CURRENT_TIMESTAMP WHERE id = ?",
+            (promote_after, recipe_id),
         )
         self._db.commit()
+        row = self._db.execute("SELECT promoted FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+        return bool(row and row[0])
 
     def failure(self, recipe_id: int, max_streak: int) -> bool:
         """Suma un fallo; si lleva `max_streak` seguidos, la desactiva. Devuelve True si queda desactivada."""
         self._db.execute(
-            "UPDATE recipes SET failures = failures + 1, streak = streak + 1, last_used = CURRENT_TIMESTAMP, "
+            "UPDATE recipes SET failures = failures + 1, streak = streak + 1, wins = 0, promoted = 0, "
+            "last_used = CURRENT_TIMESTAMP, "
             "enabled = CASE WHEN streak + 1 >= ? THEN 0 ELSE enabled END WHERE id = ?",
             (max_streak, recipe_id),
         )
@@ -810,8 +831,32 @@ class RecipeStore:
             found.append((literal_count(recipe.trigger), rate, recipe, values))
         if not found:
             return None
-        found.sort(key=lambda f: (-f[0], -f[1]))
+        found.sort(key=lambda f: (not f[2].promoted, -f[0], -f[1]))
         return found[0][2], found[0][3]
+
+    # --- uso -------------------------------------------------------------------------------------------------------
+
+    def used(self, kind: str, key: str, label: str, half_life_days: float, now: float | None = None) -> None:
+        """Un uso más de esa app, receta o alias; lo anterior decae con el tiempo."""
+        now = time.time() if now is None else now
+        row = self._db.execute("SELECT score, updated FROM usage WHERE kind = ? AND key = ?", (kind, key)).fetchone()
+        score = (decayed(row[0], row[1], now, half_life_days) if row else 0.0) + 1.0
+        self._db.execute(
+            "INSERT INTO usage (kind, key, label, score, updated) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(kind, key) DO UPDATE SET label = excluded.label, score = excluded.score, "
+            "updated = excluded.updated",
+            (kind, key, label, score, now),
+        )
+        self._db.commit()
+
+    def frequent(
+        self, half_life_days: float, limit: int = 10, now: float | None = None
+    ) -> list[tuple[str, str, float]]:
+        """Lo más usado ahora mismo: (tipo, etiqueta, puntuación con el decaimiento aplicado)."""
+        now = time.time() if now is None else now
+        rows = self._db.execute("SELECT kind, label, score, updated FROM usage").fetchall()
+        scored = [(kind, label, decayed(score, updated, now, half_life_days)) for kind, label, score, updated in rows]
+        return sorted((s for s in scored if s[2] >= 0.05), key=lambda s: -s[2])[:limit]
 
     # --- alias -----------------------------------------------------------------------------------------------------
 

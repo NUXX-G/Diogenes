@@ -2,6 +2,8 @@
   "_leeme": "Recetas y alias aprendidos. Palabras sin acentos ni mayúsculas. Las recetas y alias viven en data/diogenes.db (no versionado).",
   "fallos_seguidos_para_desactivar": 3,
   "fallos_para_olvidar_alias": 2,
+  "exitos_para_atajo": 5,
+  "vida_media_dias": 14,
   "relleno": ["diogenes", "oye", "hey", "venga", "por favor", "porfa", "porfavor", "ahora", "gracias"],
   "correcciones": [
     "no", "eso no", "esa no", "ese no", "no era eso", "no es eso", "no es esa", "no es ese", "no queria eso", "mal",

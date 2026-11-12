@@ -140,3 +140,4 @@ class Session:
         finally:
             worker.cancel()
             await asyncio.gather(worker, *self._releasing, return_exceptions=True)
+            agent.flush()  # «salir» o cerrar el CLI: la receta del último turno, si nadie la corrigió, se guarda

@@ -715,7 +715,7 @@ def _list_recipes(recipes: list[Recipe]) -> str:
         return "No hay recetas aprendidas."
     lines = []
     for r in recipes:
-        state = "" if r.enabled else " · DESACTIVADA"
+        state = (" · ⚡ atajo" if r.promoted else "") + ("" if r.enabled else " · DESACTIVADA")
         lines.append(f"{r.id}. «{r.trigger}» ({r.origin}) ✓{r.successes} ✗{r.failures}{state} · ej.: {r.example}")
     return "\n".join(lines)
 
@@ -775,6 +775,7 @@ class Agent:
         self._request = ""  # el mensaje del usuario en este turno (la petición original si responde a una lista)
 
     def reset(self) -> None:
+        self.flush()  # «/nuevo» no corrige lo último: si había una candidata, se guarda
         self._history.clear()
         self._pending = None
         self._last_user = self._last_answer = ""
@@ -1078,7 +1079,7 @@ class Agent:
         que faltaban como pista. Devuelve True si el turno acabó."""
         assert recipe.id is not None
         to_wire = {mcp: wire for wire, mcp in to_mcp.items()}
-        self._turn.route = "receta"
+        self._turn.route = "atajo" if recipe.promoted else "receta"
         self._turn.recipe = recipe.id
         page: str | None = None
         history_before, steps_before = len(self._history), len(result.steps)
@@ -1116,7 +1117,14 @@ class Agent:
                 why = str(data.get("mensaje") or "no salió como la primera vez")[:120]
                 return self._replay_failed(fail, f"{_label(rstep.tool)}: {why}")
             page = data["pagina"] if isinstance(data.get("pagina"), str) else None
-        self._recipes.success(recipe.id)  # type: ignore[union-attr]
+        store = self._recipes
+        assert store is not None
+        was_promoted = recipe.promoted
+        if store.success(recipe.id, self._recipe_config.promote_after) and not was_promoted and self._on_note:
+            self._on_note(
+                f"  ⏱ receta n.º {recipe.id} ascendida a atajo: {self._recipe_config.promote_after} aciertos seguidos"
+            )
+        store.used("receta", str(recipe.id), f"n.º {recipe.id} «{recipe.example}»", self._recipe_config.half_life_days)
         self._last_recipe = recipe.id
         answer = self._template_answer(original, result.steps)
         if answer is None:
@@ -1177,6 +1185,12 @@ class Agent:
         recorded = [Recorded(s.tool, s.arguments, s.result, request) for s in steps]
         self._candidate = build_recipe(request, recorded, self._intent.verb_root, self._recipe_config)
 
+    def flush(self) -> None:
+        """Al salir: la receta candidata del último turno se guarda (nadie la ha corregido)."""
+        if self._recipes is not None and self._candidate is not None:
+            self._recipes.save(self._candidate)
+        self._candidate = None
+
     def start_teaching(self, phrase: str) -> str:
         if self._recipes is None:
             return "No puedo aprender: no hay base de recetas."
@@ -1222,12 +1236,18 @@ class Agent:
         if name == "/cancelar":
             return self.cancel_teaching()
         if self._recipes is None:
-            return "No hay base de recetas." if name in ("/recetas", "/receta", "/alias") else None
+            return "No hay base de recetas." if name in ("/recetas", "/receta", "/alias", "/frecuentes") else None
         if name == "/recetas":
             return _list_recipes(self._recipes.all())
         if name == "/receta" and len(rest) == 2 and rest[0].lower() == "borrar" and rest[1].isdigit():
             ok = self._recipes.delete(int(rest[1]))
             return f"Receta n.º {rest[1]} borrada." if ok else f"No hay ninguna receta n.º {rest[1]}."
+        if name == "/frecuentes":
+            top = self._recipes.frequent(self._recipe_config.half_life_days)
+            if not top:
+                return "Aún no hay nada usado."
+            kinds = {"app": "app", "receta": "receta", "alias": "alias"}
+            return "\n".join(f"{kinds.get(k, k)} {label} · {score:.1f}" for k, label, score in top)
         if name == "/alias" and not rest:
             aliases = self._recipes.aliases()
             if not aliases:
@@ -1344,6 +1364,9 @@ class Agent:
             self._recipes.delete_alias(said)
             return None
         self._used_alias = said
+        self._recipes.used(
+            "alias", alias.alias, f"«{alias.alias}» → {alias.app_name}", self._recipe_config.half_life_days
+        )
         if name == "apps.open" and step.ok and data.get("ok") is True:
             shown = {
                 "ok": True,
@@ -1424,4 +1447,19 @@ class Agent:
         except Exception as exc:  # noqa: BLE001
             return Step(name, arguments, f"ERROR: {type(exc).__name__}: {exc}", False)
         self._intent.observe(name, arguments, output)
+        self._count_use(name, arguments, output)
         return Step(name, arguments, output, _salio_bien(output), asked)
+
+    def _count_use(self, name: str, arguments: dict[str, Any], output: str) -> None:
+        """Cada app que se abre suma uso (lo lee hands para ordenar y desempatar sus búsquedas)."""
+        if self._recipes is None:
+            return
+        data = _json_dict(output) or {}
+        if name == "apps.open" and data.get("lanzada") is True and data.get("id"):
+            app_id, label = str(data["id"]), str(data.get("nombre", ""))
+        elif name == "apps.launch" and data.get("ok") is True and arguments.get("id"):
+            app_id = str(arguments["id"])
+            label = self._intent.app_name(app_id) or app_id
+        else:
+            return
+        self._recipes.used("app", app_id, label, self._recipe_config.half_life_days)
